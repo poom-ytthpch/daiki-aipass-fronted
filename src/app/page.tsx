@@ -1,2 +1,12 @@
-import {backendFetch} from '@/lib/backend';import {StatusCard} from '@/components/StatusCard';
-export default async function Home(){let backend='Offline',models='Waiting',tokens='0';try{const [m,u]=await Promise.all([backendFetch('/v1/models'),backendFetch('/v1/usage')]);backend='Online';if(m.ok){const d=await m.json() as {data?:unknown[]};models=(d.data?.length||0)>0?'Configured':'Waiting'}if(u.ok){const d=await u.json() as {usage?:{totalTokens?:number}};tokens=String(d.usage?.totalTokens||0)}}catch{}return <><div className="top"><div><div className="h1">Daiki AI Passport</div><div className="muted">Private AI workspace, gateway and administration</div></div><span className="pill"><span className="dot"/>Control plane</span></div><div className="grid cards"><StatusCard label="Backend" value={backend} detail="Go + Chi"/><StatusCard label="Model router" value={models} detail="Aliases only"/><StatusCard label="Tokens" value={tokens} detail="Durable usage ledger"/><StatusCard label="Local LLM" value="Waiting" detail="Optional dependency"/></div><div className="grid" style={{gridTemplateColumns:'2fr 1fr',marginTop:16}}><section className="card"><h3>Platform state</h3><p className="muted">Web, identity, API gateway, backend, queue, data and observability remain independent from the GPU host. Local inference can be attached later without changing the client API.</p></section><section className="card"><h3>Request path</h3><div style={{lineHeight:2}}>Vercel Web / API Key<br/>↓ Daiki Backend<br/>↓ Quota + Queue + Router<br/>↓ LiteLLM<br/>↓ Private inference</div></section></div></>}
+import {redirect} from 'next/navigation';
+import {getSession,isAdmin} from '@/lib/auth';
+import {backendFetch} from '@/lib/backend';
+
+type Me={isAdmin?:boolean};
+export default async function Home(){
+  const session=await getSession();
+  if(!session)redirect('/login');
+  let admin=isAdmin(session);
+  try{const r=await backendFetch('/v1/me');if(r.ok)admin=admin||Boolean(((await r.json()) as Me).isAdmin)}catch{}
+  redirect(admin?'/admin':'/chat');
+}

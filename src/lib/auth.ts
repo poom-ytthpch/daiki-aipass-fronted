@@ -1,7 +1,7 @@
 import {cookies} from 'next/headers';
 import {createCipheriv,createDecipheriv,createHash,randomBytes} from 'node:crypto';
 
-export type Session={sub:string;name:string;email?:string;roles:string[];exp:number;accessToken:string};
+export type Session={sub:string;name:string;email?:string;emailVerified?:boolean;roles:string[];exp:number;accessToken:string};
 const COOKIE='daiki_session';
 const secret=()=>process.env.SESSION_SECRET||'dev-only-change-me';
 const key=()=>createHash('sha256').update(secret()).digest();
@@ -35,7 +35,7 @@ export async function setSession(session:Session){
   })
 }
 export async function clearSession(){(await cookies()).delete(COOKIE)}
-export const isAdmin=(s:Session|null)=>!!s?.roles.some(r=>['admin','ai-admin'].includes(r));
+export const isAdmin=(s:Session|null)=>!!s&&(s.roles.some(r=>['admin','ai-admin'].includes(r))||Boolean(process.env.ADMIN_EMAIL&&s.emailVerified&&s.email&&s.email.toLowerCase()===process.env.ADMIN_EMAIL.toLowerCase()));
 export const randomState=()=>randomBytes(24).toString('base64url');
 export const oidc={
   issuer:()=>process.env.OIDC_ISSUER||'',
