@@ -1,22 +1,17 @@
 import {cookies} from 'next/headers';
-import {NextRequest,NextResponse} from 'next/server';
+import {NextResponse} from 'next/server';
 import {oidc,randomState} from '@/lib/auth';
 
-export async function GET(req:NextRequest){
+export async function GET(){
   const issuer=oidc.issuer();
   if(!issuer)return NextResponse.json({error:'OIDC issuer not configured'},{status:503});
-  const provider=req.nextUrl.searchParams.get('provider');
-  if(provider==='google'&&!process.env.GOOGLE_CLIENT_ID){
-    return NextResponse.redirect(new URL('/login?error=google_not_configured',oidc.publicBase()));
-  }
   const state=randomState();
   (await cookies()).set('daiki_oidc_state',state,{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',path:'/',maxAge:600});
-  const u=new URL(`${issuer.replace(/\/$/,'')}/protocol/openid-connect/auth`);
+  const u=new URL(`${issuer.replace(/\/$/,'')}/protocol/openid-connect/registrations`);
   u.searchParams.set('client_id',oidc.clientId());
   u.searchParams.set('redirect_uri',oidc.redirectUri());
   u.searchParams.set('response_type','code');
   u.searchParams.set('scope','openid profile email');
   u.searchParams.set('state',state);
-  if(provider==='google')u.searchParams.set('kc_idp_hint','google');
   return NextResponse.redirect(u);
 }
