@@ -1,2 +1,4 @@
-import {redirect} from 'next/navigation';import {getSession,isAdmin} from '@/lib/auth';import {AdminDashboard} from '@/components/AdminDashboard';
-export default async function Admin(){const s=await getSession();if(!s)redirect('/login');if(!isAdmin(s))redirect('/chat');return <AdminDashboard/>}
+import {redirect} from 'next/navigation';
+import {getAdminAccess} from '@/lib/admin';
+import {AdminDashboard} from '@/components/AdminDashboard';
+export default async function Admin(){const a=await getAdminAccess();if(!a.authenticated)redirect('/login');if(!a.admin)redirect('/chat');return <AdminDashboard/>}
