@@ -8,5 +8,5 @@ export type NavIcon=keyof typeof icons;
 export function NavItem({href,label,icon}:{href:string;label:string;icon:NavIcon}){
   const pathname=usePathname();const Icon=icons[icon];
   const active=pathname===href||(href!=='/admin'&&href!=='/'&&pathname.startsWith(`${href}/`));
-  return <Link className={`navItem ${active?'active':''}`} href={href}><Icon size={17} strokeWidth={1.8}/><span>{label}</span></Link>;
+  return <Link className={`navItem ${active?'active':''}`} href={href} title={label}><Icon size={18} strokeWidth={1.8}/><span>{label}</span></Link>;
 }
