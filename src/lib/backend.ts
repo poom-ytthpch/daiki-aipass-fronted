@@ -25,7 +25,7 @@ export async function proxyBackend(path:string,req?:Request){
     if(req&& !['GET','HEAD'].includes(req.method)) init.body=await req.text();
     const upstream=await backendFetch(path,init);
     const headers=new Headers();
-    for(const name of ['content-type','cache-control','x-accel-buffering','x-daiki-research-used','x-daiki-research-sources','x-daiki-research-mode','x-daiki-model-alias','x-daiki-skills','x-daiki-tools']){const value=upstream.headers.get(name);if(value)headers.set(name,value)}
+    for(const name of ['content-type','cache-control','x-accel-buffering','x-daiki-request-id','x-daiki-research-used','x-daiki-research-sources','x-daiki-research-mode','x-daiki-model-alias','x-daiki-skills','x-daiki-tools','x-daiki-thinking-mode','x-daiki-token-estimate-input','x-daiki-token-estimate-thinking','x-daiki-token-estimate-output','x-daiki-token-estimate-total']){const value=upstream.headers.get(name);if(value)headers.set(name,value)}
     return new Response(upstream.body,{status:upstream.status,headers});
   }catch(e){
     const message=e instanceof Error?e.message:String(e);

@@ -168,20 +168,35 @@ export default function Chat(){
       const current=await ensureSession(userMsg.text);
       await saveSessionMessage(current,'user',userMsg.text,currentAttachments.map(a=>a.id));
       setMsgs([...history,{role:'ai',text:''}]);setText('');setAttachments([]);
-      const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:pending?'fast':model,researchMode,thinkingMode:effectiveThinkingMode,messages:history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),attachmentIds:currentAttachments.map(a=>a.id),stream:true})});
+      const requestBase={model:pending?'fast':model,researchMode,thinkingMode:effectiveThinkingMode,messages:history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),attachmentIds:currentAttachments.map(a=>a.id)};
+      const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...requestBase,stream:true})});
       if(!r.ok||!r.body){const d=await r.json().catch(()=>({error:'Gateway unavailable'}));const suffix=d.retryAfterSeconds?` Try again in ${d.retryAfterSeconds}s.`:'';throw new Error((errorText(d.error||d.detail)||'Gateway unavailable')+suffix)}
       const researchSources=Number(r.headers.get('x-daiki-research-sources')||0);
+      const requestId=r.headers.get('x-daiki-request-id')||'';
       if(researchSources>0)setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,researchSources}:m));
       const reader=r.body.getReader();const dec=new TextDecoder();let buf='';let answer='';
-      while(true){
-        const {done,value}=await reader.read();if(done)break;
-        buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';
-        for(const raw of lines){
-          const line=raw.trim();if(!line.startsWith('data:'))continue;
-          const data=line.slice(5).trim();if(!data||data==='[DONE]')continue;
-          try{const j=JSON.parse(data);if(j?.error)throw new Error(errorText(j.error));const chunk=j?.choices?.[0]?.delta?.content||'';if(chunk){answer+=chunk;setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,text:answer}:m))}if(j?.usage){const input=Number(j.usage.prompt_tokens||0);const completion=Number(j.usage.completion_tokens||0);const reasoning=Number(j.usage.completion_tokens_details?.reasoning_tokens||0);const usage:TokenUsage={input,reasoning,answer:Math.max(0,completion-reasoning),total:Number(j.usage.total_tokens||input+completion)};setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,tokenUsage:usage}:m))}}
-          catch(err){if(err instanceof Error&&err.message)throw err}
+      let streamFailure:unknown=null;
+      try{
+        while(true){
+          const {done,value}=await reader.read();if(done)break;
+          buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';
+          for(const raw of lines){
+            const line=raw.trim();if(!line.startsWith('data:'))continue;
+            const data=line.slice(5).trim();if(!data||data==='[DONE]')continue;
+            try{const j=JSON.parse(data);if(j?.error)throw new Error(errorText(j.error));const chunk=j?.choices?.[0]?.delta?.content||'';if(chunk){answer+=chunk;setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,text:answer}:m))}if(j?.usage){const input=Number(j.usage.prompt_tokens||0);const completion=Number(j.usage.completion_tokens||0);const reasoning=Number(j.usage.completion_tokens_details?.reasoning_tokens||0);const usage:TokenUsage={input,reasoning,answer:Math.max(0,completion-reasoning),total:Number(j.usage.total_tokens||input+completion)};setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,tokenUsage:usage}:m))}}
+            catch(err){if(err instanceof Error&&err.message)throw err}
+          }
         }
+      }catch(err){streamFailure=err}
+      if(streamFailure&&!answer){
+        const fallback=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json','x-daiki-retry-of':requestId},body:JSON.stringify({...requestBase,stream:false})});
+        const d=await fallback.json().catch(()=>({}));
+        if(!fallback.ok)throw streamFailure instanceof Error?streamFailure:new Error('Stream interrupted');
+        answer=String(d?.choices?.[0]?.message?.content||'');
+        const input=Number(d?.usage?.prompt_tokens||0);const completion=Number(d?.usage?.completion_tokens||0);const reasoning=Number(d?.usage?.completion_tokens_details?.reasoning_tokens||0);
+        if(answer)setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,text:answer,tokenUsage:{input,reasoning,answer:Math.max(0,completion-reasoning),total:Number(d?.usage?.total_tokens||input+completion)}}:m));
+      }else if(streamFailure){
+        setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,text:answer+'\n\n_Connection interrupted after a partial response._'}:m));
       }
       if(answer){await saveSessionMessage(current,'assistant',answer);await refreshSessions()}
       else setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,text:'I didn’t get a response back. Please try again.'}:m));
