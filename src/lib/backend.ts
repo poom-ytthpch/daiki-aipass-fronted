@@ -1,15 +1,22 @@
-import {getSession} from '@/lib/auth';
+import {refreshSession} from '@/lib/auth';
 
 const base=()=> (process.env.DAIKI_BACKEND_URL||'').replace(/\/$/,'');
 
 export async function backendFetch(path:string,init:RequestInit={}){
-  const session=await getSession();
+  let session=await refreshSession(false);
   if(!session?.accessToken) throw new Error('Unauthorized');
   if(!base()) throw new Error('DAIKI_BACKEND_URL is not configured');
   const headers=new Headers(init.headers);
   headers.set('authorization',`Bearer ${session.accessToken}`);
   if(typeof init.body==='string'&&!headers.has('content-type')) headers.set('content-type','application/json');
-  return fetch(`${base()}${path}`,{...init,headers,cache:'no-store'});
+  let response=await fetch(`${base()}${path}`,{...init,headers,cache:'no-store'});
+  if(response.status===401){
+    session=await refreshSession(true);
+    if(!session?.accessToken) throw new Error('Unauthorized');
+    headers.set('authorization',`Bearer ${session.accessToken}`);
+    response=await fetch(`${base()}${path}`,{...init,headers,cache:'no-store'});
+  }
+  return response;
 }
 
 export async function proxyBackend(path:string,req?:Request){
