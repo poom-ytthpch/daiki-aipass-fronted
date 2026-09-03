@@ -18,6 +18,7 @@ const adminNav:Item[]=[
   {label:'API Keys',href:'/admin/api-keys',icon:'keys'},
   {label:'Usage',href:'/admin/usage',icon:'usage'},
   {label:'System',href:'/admin/system',icon:'system'},
+  {label:'Providers',href:'/admin/providers',icon:'providers'},
   {label:'Email',href:'/admin/email',icon:'settings'},
   {label:'Audit',href:'/admin/audit',icon:'audit'},
 ];

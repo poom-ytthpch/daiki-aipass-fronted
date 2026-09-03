@@ -26,6 +26,7 @@ export function AdminDashboard(){
       <Link className="card adminQuick" href="/admin/system"><strong>System</strong><span>Queue and service health</span></Link>
       <Link className="card adminQuick" href="/admin/usage"><strong>Usage</strong><span>Token usage by each user</span></Link>
       <Link className="card adminQuick" href="/admin/audit"><strong>Audit</strong><span>Review administrative changes</span></Link>
+      <Link className="card adminQuick" href="/admin/providers"><strong>Providers</strong><span>Connect vLLM, LM Studio and Ollama</span></Link>
     </div>
     <section className="card" style={{marginTop:16}}><div className="sectionHead"><h3>Services</h3><span className="muted small">Live health</span></div>{(summary.services||[]).map(s=><div className="healthRow" key={s.name}><span>{s.name}</span><span className={`status ${s.status}`}>{s.status}{s.latencyMs!=null?` · ${s.latencyMs}ms`:''}</span></div>)}</section>
   </>;
