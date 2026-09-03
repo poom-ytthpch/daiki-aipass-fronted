@@ -1,20 +1,29 @@
 'use client';
 
 import {FormEvent,useEffect,useMemo,useRef,useState} from 'react';
-import {Check,Copy,File,FolderOpen,Globe2,History,Image as ImageIcon,Menu,Paperclip,Pencil,Plus,Search,Send,Trash2,X} from 'lucide-react';
+import {Brain,Check,Copy,File,FolderOpen,Globe2,History,Image as ImageIcon,Menu,Paperclip,Pencil,Plus,Search,Send,Trash2,X} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 type Attachment={id:string;name:string;relativePath:string;source:'file'|'image'|'folder';mediaType:string;sizeBytes:number;extractStatus:string;createdAt:string};
-type Msg={role:'user'|'ai';text:string;attachments?:Attachment[];researchSources?:number};
+type TokenUsage={input:number;reasoning:number;answer:number;total:number};
+type Msg={role:'user'|'ai';text:string;attachments?:Attachment[];researchSources?:number;tokenUsage?:TokenUsage};
 type ChatSession={id:string;title:string;modelAlias:string;createdAt:string;updatedAt:string};
 type StoredMessage={id:number;role:'user'|'assistant';content:string;attachmentIds:string[];createdAt:string};
 type PendingPolicy={model:string;tokenLimitPerDay:number;requestsPerHour:number;minIntervalSeconds:number;maxCompletionTokens:number;textOnly:boolean};
 type Account={status?:'pending'|'approved'|'suspended'|'rejected';pendingChatPolicy?:PendingPolicy};
-type Prefs={defaultModel?:string;responseStyle?:string;researchMode?:'auto'|'web'|'off'};
+type ThinkingMode='off'|'low'|'medium'|'high';
+type Prefs={defaultModel?:string;responseStyle?:string;researchMode?:'auto'|'web'|'off';thinkingMode?:ThinkingMode};
 type CapabilityInfo={mode:string;maxToolRounds:number;skills:{id:string;name:string;description:string}[];tools:{id:string;name:string;description:string}[]};
 
 const routes=[['auto','Auto'],['fast','Fast'],['balanced','Balanced'],['deep','Deep']] as const;
+const thinkingLevels=[
+  {id:'off' as const,label:'Off',reasoning:0,completion:1024},
+  {id:'low' as const,label:'Low',reasoning:384,completion:1536},
+  {id:'medium' as const,label:'Medium',reasoning:768,completion:2560},
+  {id:'high' as const,label:'High',reasoning:1536,completion:4096},
+];
+const fmtTokens=(n:number)=>n>=1000?`${(n/1000).toFixed(n>=10000?0:1)}K`:String(Math.max(0,Math.round(n)));
 const starters=[
   ['Explain','Explain this simply: '],
   ['Plan','Make a practical plan for '],
@@ -46,6 +55,7 @@ export default function Chat(){
   const [uploading,setUploading]=useState(0);
   const [model,setModel]=useState('auto');
   const [researchMode,setResearchMode]=useState<'auto'|'web'|'off'>('auto');
+  const [thinkingMode,setThinkingMode]=useState<ThinkingMode>('medium');
   const [account,setAccount]=useState<Account|null>(null);
   const [msgs,setMsgs]=useState<Msg[]>([]);
   const [attachments,setAttachments]=useState<Attachment[]>([]);
@@ -73,6 +83,7 @@ export default function Chat(){
         const p=JSON.parse(localStorage.getItem('daiki_preferences')||'{}') as Prefs;
         if(p.defaultModel)setModel(p.defaultModel);
         if(p.researchMode)setResearchMode(p.researchMode);
+        if(p.thinkingMode)setThinkingMode(p.thinkingMode);
       }catch{}
     },0);
     void fetch('/api/account',{cache:'no-store'}).then(async r=>{if(r.ok){const a=await r.json() as Account;setAccount(a);if(a.status==='pending')setModel('fast')}}).catch(()=>{});
@@ -87,6 +98,20 @@ export default function Chat(){
 
   const pending=account?.status==='pending';
   const currentSession=sessions.find(x=>x.id===sessionId);
+  const effectiveThinkingMode:ThinkingMode=pending?'off':thinkingMode;
+  const thinkingIndex=Math.max(0,thinkingLevels.findIndex(x=>x.id===effectiveThinkingMode));
+  const thinking=thinkingLevels[thinkingIndex]||thinkingLevels[2];
+  const estimatedInput=useMemo(()=>{
+    const content=[...msgs.map(m=>m.text),text].join('\n');
+    const bytes=new TextEncoder().encode(content).length;
+    return Math.min(16000,Math.ceil(bytes/4)+256);
+  },[msgs,text]);
+  const estimatedVisible=Math.max(256,thinking.completion-thinking.reasoning);
+  const estimatedTotal=estimatedInput+thinking.completion;
+  const updateThinkingMode=(next:ThinkingMode)=>{
+    setThinkingMode(next);
+    try{const p=JSON.parse(localStorage.getItem('daiki_preferences')||'{}');localStorage.setItem('daiki_preferences',JSON.stringify({...p,thinkingMode:next}))}catch{}
+  };
   const filteredSessions=useMemo(()=>{
     const q=historyQuery.trim().toLowerCase();
     return q?sessions.filter(s=>s.title.toLowerCase().includes(q)):sessions;
@@ -143,7 +168,7 @@ export default function Chat(){
       const current=await ensureSession(userMsg.text);
       await saveSessionMessage(current,'user',userMsg.text,currentAttachments.map(a=>a.id));
       setMsgs([...history,{role:'ai',text:''}]);setText('');setAttachments([]);
-      const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:pending?'fast':model,researchMode,messages:history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),attachmentIds:currentAttachments.map(a=>a.id),stream:true})});
+      const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:pending?'fast':model,researchMode,thinkingMode:effectiveThinkingMode,messages:history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),attachmentIds:currentAttachments.map(a=>a.id),stream:true})});
       if(!r.ok||!r.body){const d=await r.json().catch(()=>({error:'Gateway unavailable'}));const suffix=d.retryAfterSeconds?` Try again in ${d.retryAfterSeconds}s.`:'';throw new Error((errorText(d.error||d.detail)||'Gateway unavailable')+suffix)}
       const researchSources=Number(r.headers.get('x-daiki-research-sources')||0);
       if(researchSources>0)setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,researchSources}:m));
@@ -154,7 +179,7 @@ export default function Chat(){
         for(const raw of lines){
           const line=raw.trim();if(!line.startsWith('data:'))continue;
           const data=line.slice(5).trim();if(!data||data==='[DONE]')continue;
-          try{const j=JSON.parse(data);if(j?.error)throw new Error(errorText(j.error));const chunk=j?.choices?.[0]?.delta?.content||'';if(chunk){answer+=chunk;setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,text:answer}:m))}}
+          try{const j=JSON.parse(data);if(j?.error)throw new Error(errorText(j.error));const chunk=j?.choices?.[0]?.delta?.content||'';if(chunk){answer+=chunk;setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,text:answer}:m))}if(j?.usage){const input=Number(j.usage.prompt_tokens||0);const completion=Number(j.usage.completion_tokens||0);const reasoning=Number(j.usage.completion_tokens_details?.reasoning_tokens||0);const usage:TokenUsage={input,reasoning,answer:Math.max(0,completion-reasoning),total:Number(j.usage.total_tokens||input+completion)};setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,tokenUsage:usage}:m))}}
           catch(err){if(err instanceof Error&&err.message)throw err}
         }
       }
@@ -185,13 +210,23 @@ export default function Chat(){
       <header className="chatTopbar">
         <div className="chatTopbarTitle"><button className="iconButton historyToggle" type="button" aria-label="Open chat history" onClick={()=>setHistoryOpen(true)}><Menu size={19}/></button><div><strong>{currentSession?.title||'New chat'}</strong><small>{busy?'Daiki is thinking…':'Daiki AI Passport'}</small></div></div>
         <div className="chatTopbarControls">
+          <details className="thinkingControl">
+            <summary aria-disabled={pending}><Brain size={13}/><span>Think: {thinking.label}</span></summary>
+            <div className="thinkingPopover">
+              <div className="thinkingPopoverHead"><div><strong>Thinking</strong><small>{thinking.label}</small></div><strong>{fmtTokens(thinking.reasoning)}</strong></div>
+              <input aria-label="Thinking level" type="range" min={0} max={thinkingLevels.length-1} step={1} value={thinkingIndex} disabled={pending} onChange={e=>updateThinkingMode(thinkingLevels[Number(e.target.value)].id)}/>
+              <div className="thinkingTicks">{thinkingLevels.map(x=><span key={x.id}>{x.label}</span>)}</div>
+              <div className="tokenBudget"><span>Estimated token budget</span><div><b>{fmtTokens(estimatedInput)}</b><small>input</small><i>+</i><b>{fmtTokens(thinking.reasoning)}</b><small>thinking</small><i>+</i><b>{fmtTokens(estimatedVisible)}</b><small>answer</small><i>=</i><b>{fmtTokens(estimatedTotal)}</b><small>total max</small></div></div>
+              <p>{pending?'Pending access uses Thinking Off and the account completion cap.':'Formula: estimated input + thinking budget + visible answer budget. Actual usage replaces the estimate under each answer.'} Hidden reasoning content is never displayed.</p>
+            </div>
+          </details>
           <select aria-label="Research mode" value={researchMode} onChange={e=>{const v=e.target.value as 'auto'|'web'|'off';setResearchMode(v);try{const p=JSON.parse(localStorage.getItem('daiki_preferences')||'{}');localStorage.setItem('daiki_preferences',JSON.stringify({...p,researchMode:v}))}catch{}}}><option value="auto">Web: Auto</option><option value="web">Web: On</option><option value="off">Web: Off</option></select>
           <select aria-label="Model route" value={pending?'fast':model} disabled={pending} onChange={e=>void updateSessionModel(e.target.value)}>{(pending?[['fast','Fast'] as const]:routes).map(([id,label])=><option key={id} value={id}>{label}</option>)}</select>
         </div>
       </header>
 
       <div className="chatScroll" ref={scrollRef} onDragOver={e=>{if(!pending)e.preventDefault()}} onDrop={e=>{if(pending)return;e.preventDefault();void uploadFiles(e.dataTransfer.files,'file')}}>
-        {!msgs.length?<div className="chatEmptyState"><div className="emptyMark">D</div><h1>What can I help with?</h1><p>Ask anything, research the web, or drop in files and project folders.</p><div className="promptStarters">{starters.map(([label,prompt])=><button key={label} type="button" onClick={()=>setText(prompt)}><span>{label}</span><small>{prompt}</small></button>)}</div></div>:<div className="messageFeed">{msgs.map((m,i)=><div key={i} className={`messageRow ${m.role}`}><div className="messageAvatar">{m.role==='ai'?'D':'You'}</div><div className="messageStack"><div className="bubble"><MessageContent message={m}/></div>{m.role==='ai'&&m.text?<div className="messageActions"><button type="button" aria-label="Copy response" onClick={()=>void copyAnswer(m.text,i)}>{copiedIndex===i?<Check size={13}/>:<Copy size={13}/>}<span>{copiedIndex===i?'Copied':'Copy'}</span></button></div>:null}{m.researchSources?<span className="researchBadge"><Globe2 size={12}/>Web searched · {m.researchSources} sources</span>:null}{m.attachments?.length?<div className="sentAttachments">{m.attachments.map(a=><a key={a.id} className="sentAttachment" href={`/api/attachments/${encodeURIComponent(a.id)}`} target="_blank" rel="noreferrer">{a.mediaType.startsWith('image/')?<ImageIcon size={14}/>:a.source==='folder'?<FolderOpen size={14}/>:<File size={14}/>}<span>{a.relativePath}</span></a>)}</div>:null}</div></div>)}</div>}
+        {!msgs.length?<div className="chatEmptyState"><div className="emptyMark">D</div><h1>What can I help with?</h1><p>Ask anything, research the web, or drop in files and project folders.</p><div className="promptStarters">{starters.map(([label,prompt])=><button key={label} type="button" onClick={()=>setText(prompt)}><span>{label}</span><small>{prompt}</small></button>)}</div></div>:<div className="messageFeed">{msgs.map((m,i)=><div key={i} className={`messageRow ${m.role}`}><div className="messageAvatar">{m.role==='ai'?'D':'You'}</div><div className="messageStack"><div className="bubble"><MessageContent message={m}/></div>{m.role==='ai'&&m.text?<div className="messageActions"><button type="button" aria-label="Copy response" onClick={()=>void copyAnswer(m.text,i)}>{copiedIndex===i?<Check size={13}/>:<Copy size={13}/>}<span>{copiedIndex===i?'Copied':'Copy'}</span></button></div>:null}{m.researchSources?<span className="researchBadge"><Globe2 size={12}/>Web searched · {m.researchSources} sources</span>:null}{m.tokenUsage?<span className="tokenUsageBadge"><Brain size={12}/>Tokens · {fmtTokens(m.tokenUsage.input)} in · {fmtTokens(m.tokenUsage.reasoning)} think · {fmtTokens(m.tokenUsage.answer)} answer · {fmtTokens(m.tokenUsage.total)} total</span>:null}{m.attachments?.length?<div className="sentAttachments">{m.attachments.map(a=><a key={a.id} className="sentAttachment" href={`/api/attachments/${encodeURIComponent(a.id)}`} target="_blank" rel="noreferrer">{a.mediaType.startsWith('image/')?<ImageIcon size={14}/>:a.source==='folder'?<FolderOpen size={14}/>:<File size={14}/>}<span>{a.relativePath}</span></a>)}</div>:null}</div></div>)}</div>}
       </div>
 
       <div className="composerDock">
