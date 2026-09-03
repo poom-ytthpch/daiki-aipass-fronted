@@ -1,7 +1,7 @@
 'use client';
 
 import {FormEvent,useEffect,useMemo,useRef,useState} from 'react';
-import {File,FolderOpen,Globe2,History,Image as ImageIcon,Menu,Paperclip,Pencil,Plus,Search,Send,Trash2,X} from 'lucide-react';
+import {Check,Copy,File,FolderOpen,Globe2,History,Image as ImageIcon,Menu,Paperclip,Pencil,Plus,Search,Send,Trash2,X} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -61,7 +61,9 @@ export default function Chat(){
   const fileRef=useRef<HTMLInputElement>(null);
   const imageRef=useRef<HTMLInputElement>(null);
   const folderRef=useRef<HTMLInputElement>(null);
+  const textareaRef=useRef<HTMLTextAreaElement>(null);
   const scrollRef=useRef<HTMLDivElement>(null);
+  const [copiedIndex,setCopiedIndex]=useState<number|null>(null);
 
   useEffect(()=>{
     folderRef.current?.setAttribute('webkitdirectory','');
@@ -79,6 +81,9 @@ export default function Chat(){
     return()=>window.clearTimeout(prefTimer);
   },[]);
   useEffect(()=>{scrollRef.current?.scrollTo({top:scrollRef.current.scrollHeight,behavior:'smooth'})},[msgs]);
+  useEffect(()=>{const el=textareaRef.current;if(!el)return;el.style.height='auto';el.style.height=`${Math.min(el.scrollHeight,180)}px`},[text]);
+  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setHistoryOpen(false);setAttachMenu(false)}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[]);
+  const copyAnswer=async(text:string,index:number)=>{try{await navigator.clipboard.writeText(text);setCopiedIndex(index);window.setTimeout(()=>setCopiedIndex(null),1400)}catch{}};
 
   const pending=account?.status==='pending';
   const currentSession=sessions.find(x=>x.id===sessionId);
@@ -186,14 +191,14 @@ export default function Chat(){
       </header>
 
       <div className="chatScroll" ref={scrollRef} onDragOver={e=>{if(!pending)e.preventDefault()}} onDrop={e=>{if(pending)return;e.preventDefault();void uploadFiles(e.dataTransfer.files,'file')}}>
-        {!msgs.length?<div className="chatEmptyState"><div className="emptyMark">D</div><h1>What can I help with?</h1><p>Ask anything, research the web, or drop in files and project folders.</p><div className="promptStarters">{starters.map(([label,prompt])=><button key={label} type="button" onClick={()=>setText(prompt)}><span>{label}</span><small>{prompt}</small></button>)}</div></div>:<div className="messageFeed">{msgs.map((m,i)=><div key={i} className={`messageRow ${m.role}`}><div className="messageAvatar">{m.role==='ai'?'D':'You'}</div><div className="messageStack"><div className="bubble"><MessageContent message={m}/></div>{m.researchSources?<span className="researchBadge"><Globe2 size={12}/>Web searched · {m.researchSources} sources</span>:null}{m.attachments?.length?<div className="sentAttachments">{m.attachments.map(a=><a key={a.id} className="sentAttachment" href={`/api/attachments/${encodeURIComponent(a.id)}`} target="_blank" rel="noreferrer">{a.mediaType.startsWith('image/')?<ImageIcon size={14}/>:a.source==='folder'?<FolderOpen size={14}/>:<File size={14}/>}<span>{a.relativePath}</span></a>)}</div>:null}</div></div>)}</div>}
+        {!msgs.length?<div className="chatEmptyState"><div className="emptyMark">D</div><h1>What can I help with?</h1><p>Ask anything, research the web, or drop in files and project folders.</p><div className="promptStarters">{starters.map(([label,prompt])=><button key={label} type="button" onClick={()=>setText(prompt)}><span>{label}</span><small>{prompt}</small></button>)}</div></div>:<div className="messageFeed">{msgs.map((m,i)=><div key={i} className={`messageRow ${m.role}`}><div className="messageAvatar">{m.role==='ai'?'D':'You'}</div><div className="messageStack"><div className="bubble"><MessageContent message={m}/></div>{m.role==='ai'&&m.text?<div className="messageActions"><button type="button" aria-label="Copy response" onClick={()=>void copyAnswer(m.text,i)}>{copiedIndex===i?<Check size={13}/>:<Copy size={13}/>}<span>{copiedIndex===i?'Copied':'Copy'}</span></button></div>:null}{m.researchSources?<span className="researchBadge"><Globe2 size={12}/>Web searched · {m.researchSources} sources</span>:null}{m.attachments?.length?<div className="sentAttachments">{m.attachments.map(a=><a key={a.id} className="sentAttachment" href={`/api/attachments/${encodeURIComponent(a.id)}`} target="_blank" rel="noreferrer">{a.mediaType.startsWith('image/')?<ImageIcon size={14}/>:a.source==='folder'?<FolderOpen size={14}/>:<File size={14}/>}<span>{a.relativePath}</span></a>)}</div>:null}</div></div>)}</div>}
       </div>
 
       <div className="composerDock">
         <form className="composerBox" onSubmit={submit}>
           {attachments.length||uploading?<div className="attachmentTray">{attachments.map(a=><div className="attachmentChip" key={a.id}><span className="attachmentIcon">{a.mediaType.startsWith('image/')?<ImageIcon size={16}/>:a.source==='folder'?<FolderOpen size={16}/>:<File size={16}/>}</span><div><strong>{a.name}</strong><small>{a.source==='folder'?a.relativePath:size(a.sizeBytes)} · {a.extractStatus}</small></div><button type="button" aria-label={`Remove ${a.name}`} onClick={()=>void removeAttachment(a)}><X size={14}/></button></div>)}{uploading?<div className="attachmentChip uploading"><span className="attachmentIcon"><Paperclip size={16}/></span><div><strong>Uploading…</strong><small>{uploading} file{uploading>1?'s':''}</small></div></div>:null}</div>:null}
           {uploadError?<div className="attachmentError">{uploadError}</div>:null}
-          <div className="composerRow"><div className="attachmentMenuWrap"><button className="attachBtn" type="button" aria-label="Add attachment" disabled={pending||busy} onClick={()=>setAttachMenu(x=>!x)}><Plus size={20}/></button>{attachMenu?<div className="attachmentMenu"><button type="button" onClick={()=>imageRef.current?.click()}><ImageIcon size={17}/><span><strong>Image</strong><small>PNG, JPEG, WebP and more</small></span></button><button type="button" onClick={()=>fileRef.current?.click()}><File size={17}/><span><strong>File</strong><small>Text, code, data or documents</small></span></button><button type="button" onClick={()=>folderRef.current?.click()}><FolderOpen size={17}/><span><strong>Folder</strong><small>Upload a project directory</small></span></button></div>:null}</div><textarea className="chatInput" rows={1} value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send()}}} placeholder={pending?'Message Daiki…':'Message Daiki'}/><button className="sendBtn" aria-label="Send message" disabled={busy||uploading>0||(!text.trim()&&!attachments.length)} type="submit"><Send size={18}/></button></div>
+          <div className="composerRow"><div className="attachmentMenuWrap"><button className="attachBtn" type="button" aria-label="Add attachment" disabled={pending||busy} onClick={()=>setAttachMenu(x=>!x)}><Plus size={20}/></button>{attachMenu?<div className="attachmentMenu"><button type="button" onClick={()=>imageRef.current?.click()}><ImageIcon size={17}/><span><strong>Image</strong><small>PNG, JPEG, WebP and more</small></span></button><button type="button" onClick={()=>fileRef.current?.click()}><File size={17}/><span><strong>File</strong><small>Text, code, data or documents</small></span></button><button type="button" onClick={()=>folderRef.current?.click()}><FolderOpen size={17}/><span><strong>Folder</strong><small>Upload a project directory</small></span></button></div>:null}</div><textarea ref={textareaRef} className="chatInput" rows={1} value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send()}}} placeholder={pending?'Message Daiki…':'Message Daiki'}/><button className="sendBtn" aria-label="Send message" disabled={busy||uploading>0||(!text.trim()&&!attachments.length)} type="submit"><Send size={18}/></button></div>
           <input ref={imageRef} hidden type="file" accept="image/*" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'image');e.currentTarget.value=''}}/><input ref={fileRef} hidden type="file" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'file');e.currentTarget.value=''}}/><input ref={folderRef} hidden type="file" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'folder');e.currentTarget.value=''}}/>
         </form>
         <div className="composerHint">Daiki can make mistakes. Check important information.</div>

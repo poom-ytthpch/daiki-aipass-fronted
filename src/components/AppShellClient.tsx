@@ -24,6 +24,7 @@ export function AppShellClient({children,admin,adminNav,workspace,homeHref,name,
   const [collapsed,setCollapsed]=useState(false);
   useEffect(()=>{const t=window.setTimeout(()=>setDrawer(false),0);return()=>window.clearTimeout(t)},[pathname]);
   useEffect(()=>{const t=window.setTimeout(()=>{try{setCollapsed(localStorage.getItem('daiki_sidebar_collapsed')==='1')}catch{}},0);return()=>window.clearTimeout(t)},[]);
+  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape')setDrawer(false)};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[]);
   const toggleCollapsed=()=>setCollapsed(v=>{const next=!v;try{localStorage.setItem('daiki_sidebar_collapsed',next?'1':'0')}catch{}return next});
   return <div className={`shell appShell ${collapsed?'shellCollapsed':''}`}>
     <header className="mobileTopbar">
