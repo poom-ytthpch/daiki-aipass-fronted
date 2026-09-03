@@ -16,6 +16,7 @@ const adminNav:Item[]=[
   {label:'Users',href:'/admin/users',icon:'users'},
   {label:'Usage',href:'/admin/usage',icon:'usage'},
   {label:'System',href:'/admin/system',icon:'system'},
+  {label:'Email',href:'/admin/email',icon:'settings'},
 ];
 
 export async function AppShell({children}:{children:React.ReactNode}){
