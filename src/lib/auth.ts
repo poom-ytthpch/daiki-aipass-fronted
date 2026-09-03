@@ -3,7 +3,7 @@ import {createCipheriv,createDecipheriv,createHash,randomBytes} from 'node:crypt
 
 export type Session={sub:string;name:string;email?:string;emailVerified?:boolean;roles:string[];exp:number;accessToken:string};
 const COOKIE='daiki_session';
-const secret=()=>process.env.SESSION_SECRET||'dev-only-change-me';
+const secret=()=>{const v=process.env.SESSION_SECRET||'';if(process.env.NODE_ENV==='production'&&(!v||v==='dev-only-change-me'||v.length<32))throw new Error('SESSION_SECRET must be configured with at least 32 characters in production');return v||'dev-only-change-me'};
 const key=()=>createHash('sha256').update(secret()).digest();
 const b64=(v:Buffer)=>v.toString('base64url');
 

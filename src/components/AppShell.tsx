@@ -14,9 +14,12 @@ const userNav:Item[]=[
 const adminNav:Item[]=[
   {label:'Dashboard',href:'/admin',icon:'dashboard'},
   {label:'Users',href:'/admin/users',icon:'users'},
+  {label:'Tokens',href:'/admin/tokens',icon:'tokens'},
+  {label:'API Keys',href:'/admin/api-keys',icon:'keys'},
   {label:'Usage',href:'/admin/usage',icon:'usage'},
   {label:'System',href:'/admin/system',icon:'system'},
   {label:'Email',href:'/admin/email',icon:'settings'},
+  {label:'Audit',href:'/admin/audit',icon:'audit'},
 ];
 
 export async function AppShell({children}:{children:React.ReactNode}){
