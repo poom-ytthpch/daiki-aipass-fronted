@@ -1,15 +1,18 @@
 'use client';
 
 import {FormEvent,useEffect,useMemo,useRef,useState} from 'react';
-import {Brain,Check,Copy,File,FolderOpen,Globe2,History,Image as ImageIcon,Menu,Paperclip,Pencil,Plus,Search,Send,Trash2,X} from 'lucide-react';
+import {Brain,Check,Copy,File,FolderOpen,Globe2,History,Image as ImageIcon,Menu,Paperclip,Pause,Pencil,Play,Plus,RotateCcw,Search,Send,Trash2,X} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 type Attachment={id:string;name:string;relativePath:string;source:'file'|'image'|'folder';mediaType:string;sizeBytes:number;extractStatus:string;createdAt:string};
 type TokenUsage={input:number;reasoning:number;answer:number;total:number};
-type Msg={role:'user'|'ai';text:string;attachments?:Attachment[];researchSources?:number;tokenUsage?:TokenUsage};
+type RunSource={index?:number;title?:string;url?:string;engine?:string;snippet?:string};
+type RunActivity={phase?:string;durationMs?:number;requestId?:string;research?:{mode?:string;query?:string;used?:boolean;error?:string;sourceCount?:number;sources?:RunSource[]};thinking?:{mode?:string;reasoningBudget?:number;estimate?:unknown};tokens?:TokenUsage};
+type ChatRun={id:string;sessionId:string;status:'queued'|'running'|'paused'|'completed'|'failed'|'cancelled';researchMode:string;thinkingMode:string;requestId?:string;content:string;error?:string;activity?:RunActivity;createdAt:string;startedAt?:string;completedAt?:string;updatedAt:string};
+type Msg={id?:number;role:'user'|'ai';text:string;attachments?:Attachment[];runId?:string;run?:ChatRun};
 type ChatSession={id:string;title:string;modelAlias:string;createdAt:string;updatedAt:string};
-type StoredMessage={id:number;role:'user'|'assistant';content:string;attachmentIds:string[];createdAt:string};
+type StoredMessage={id:number;role:'user'|'assistant';content:string;attachmentIds:string[];runId?:string;createdAt:string};
 type PendingPolicy={model:string;tokenLimitPerDay:number;requestsPerHour:number;minIntervalSeconds:number;maxCompletionTokens:number;textOnly:boolean};
 type Account={status?:'pending'|'approved'|'suspended'|'rejected';pendingChatPolicy?:PendingPolicy};
 type ThinkingMode='off'|'low'|'medium'|'high';
@@ -48,9 +51,25 @@ function MessageContent({message}:{message:Msg}){
   return <div className="markdownBody"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown></div>;
 }
 
+function RunActivityDetails({run}:{run:ChatRun}){
+  const activity=run.activity||{};const research=activity.research;const thinking=activity.thinking;const tokens=activity.tokens;const sources=research?.sources||[];
+  const label=run.status==='running'?'Working':run.status==='queued'?'Queued':run.status==='paused'?'Paused':run.status==='failed'?'Failed':run.status==='cancelled'?'Stopped':'Completed';
+  return <details className={`runActivity ${run.status}`} open={run.status==='failed'}>
+    <summary><span><Brain size={12}/>{label}</span><small>{research?.used?`Web · ${sources.length||research.sourceCount||0} sources`:`Web: ${research?.mode||run.researchMode}`} · Think: {thinking?.mode||run.thinkingMode}</small></summary>
+    <div className="runActivityBody">
+      <div className="activityFacts"><div><span>Status</span><strong>{label}</strong></div><div><span>Thinking</span><strong>{thinking?.mode||run.thinkingMode}</strong></div>{activity.durationMs!=null?<div><span>Duration</span><strong>{(activity.durationMs/1000).toFixed(1)}s</strong></div>:null}</div>
+      <section><strong>Web research</strong>{research?.query?<p>Query: <code>{research.query}</code></p>:<p>{research?.mode==='off'?'Web research disabled.':run.status==='running'||run.status==='queued'?'Research is evaluated by the backend while this run continues.':'No web query was required for this answer.'}</p>}{research?.error?<p className="activityError">{research.error}</p>:null}{sources.length?<div className="activitySources">{sources.map((source,i)=><a key={`${source.url||i}`} href={source.url||'#'} target="_blank" rel="noreferrer"><span>{source.title||source.url||`Source ${i+1}`}</span>{source.snippet?<small>{source.snippet}</small>:null}<em>{source.engine||'web'}</em></a>)}</div>:null}</section>
+      <section><strong>Thinking</strong><p>Mode: {thinking?.mode||run.thinkingMode}{thinking?.reasoningBudget!=null?` · budget ${fmtTokens(thinking.reasoningBudget)} tokens`:''}. Private chain-of-thought is not exposed.</p></section>
+      {tokens?<section><strong>Token usage</strong><p>{fmtTokens(tokens.input)} input · {fmtTokens(tokens.reasoning)} thinking · {fmtTokens(tokens.answer)} answer · {fmtTokens(tokens.total)} total</p></section>:null}
+      {run.error?<section><strong>Error</strong><p className="activityError">{run.error}</p></section>:null}
+      {activity.requestId||run.requestId?<small className="activityRequestId">Request {activity.requestId||run.requestId}</small>:null}
+    </div>
+  </details>;
+}
+
 export default function Chat(){
   const [text,setText]=useState('');
-  const [busy,setBusy]=useState(false);
+  const [localBusy,setBusy]=useState(false);
   const [capabilities,setCapabilities]=useState<CapabilityInfo|null>(null);
   const [uploading,setUploading]=useState(0);
   const [model,setModel]=useState('auto');
@@ -58,6 +77,7 @@ export default function Chat(){
   const [thinkingMode,setThinkingMode]=useState<ThinkingMode>('medium');
   const [account,setAccount]=useState<Account|null>(null);
   const [msgs,setMsgs]=useState<Msg[]>([]);
+  const [currentRun,setCurrentRun]=useState<ChatRun|null>(null);
   const [attachments,setAttachments]=useState<Attachment[]>([]);
   const [attachMenu,setAttachMenu]=useState(false);
   const [uploadError,setUploadError]=useState('');
@@ -68,12 +88,33 @@ export default function Chat(){
   const [historyOpen,setHistoryOpen]=useState(false);
   const [renamingId,setRenamingId]=useState('');
   const [renameText,setRenameText]=useState('');
+  const [editingMessageId,setEditingMessageId]=useState<number|null>(null);
+  const [editText,setEditText]=useState('');
+  const [copiedKey,setCopiedKey]=useState('');
   const fileRef=useRef<HTMLInputElement>(null);
   const imageRef=useRef<HTMLInputElement>(null);
   const folderRef=useRef<HTMLInputElement>(null);
   const textareaRef=useRef<HTMLTextAreaElement>(null);
   const scrollRef=useRef<HTMLDivElement>(null);
-  const [copiedIndex,setCopiedIndex]=useState<number|null>(null);
+
+  const runBlocking=Boolean(currentRun&&['queued','running','paused'].includes(currentRun.status));
+  const busy=localBusy||runBlocking;
+  const pending=account?.status==='pending';
+  const currentSession=sessions.find(x=>x.id===sessionId);
+  const effectiveThinkingMode:ThinkingMode=pending?'off':thinkingMode;
+  const thinkingIndex=Math.max(0,thinkingLevels.findIndex(x=>x.id===effectiveThinkingMode));
+  const thinking=thinkingLevels[thinkingIndex]||thinkingLevels[2];
+  const estimatedInput=useMemo(()=>{
+    const content=[...msgs.map(m=>m.text),text].join('\n');
+    const bytes=new TextEncoder().encode(content).length;
+    return Math.min(16000,Math.ceil(bytes/4)+256);
+  },[msgs,text]);
+  const estimatedVisible=Math.max(256,thinking.completion-thinking.reasoning);
+  const estimatedTotal=estimatedInput+thinking.completion;
+  const filteredSessions=useMemo(()=>{
+    const q=historyQuery.trim().toLowerCase();
+    return q?sessions.filter(s=>s.title.toLowerCase().includes(q)):sessions;
+  },[sessions,historyQuery]);
 
   useEffect(()=>{
     folderRef.current?.setAttribute('webkitdirectory','');
@@ -87,124 +128,80 @@ export default function Chat(){
       }catch{}
     },0);
     void fetch('/api/account',{cache:'no-store'}).then(async r=>{if(r.ok){const a=await r.json() as Account;setAccount(a);if(a.status==='pending')setModel('fast')}}).catch(()=>{});
-    void fetch('/api/chat-sessions',{cache:'no-store'}).then(async r=>{if(r.ok){const d=await r.json() as {sessions:ChatSession[]};setSessions(d.sessions||[])}}).catch(()=>{});
+    void fetch('/api/chat-sessions',{cache:'no-store'}).then(async r=>{if(r.ok){const d=await r.json() as {sessions:ChatSession[]};setSessions(d.sessions||[]);const saved=localStorage.getItem('daiki_current_session');if(saved)void openSession(saved,false)}}).catch(()=>{});
     void fetch('/api/capabilities',{cache:'no-store'}).then(async r=>{if(r.ok)setCapabilities(await r.json() as CapabilityInfo)}).catch(()=>{});
     return()=>window.clearTimeout(prefTimer);
+    // Session restore is intentionally mount-only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
-  useEffect(()=>{scrollRef.current?.scrollTo({top:scrollRef.current.scrollHeight,behavior:'smooth'})},[msgs]);
+  useEffect(()=>{scrollRef.current?.scrollTo({top:scrollRef.current.scrollHeight,behavior:'smooth'})},[msgs,currentRun?.status]);
   useEffect(()=>{const el=textareaRef.current;if(!el)return;el.style.height='auto';el.style.height=`${Math.min(el.scrollHeight,180)}px`},[text]);
-  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setHistoryOpen(false);setAttachMenu(false)}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[]);
-  const copyAnswer=async(text:string,index:number)=>{try{await navigator.clipboard.writeText(text);setCopiedIndex(index);window.setTimeout(()=>setCopiedIndex(null),1400)}catch{}};
+  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setHistoryOpen(false);setAttachMenu(false);setEditingMessageId(null)}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[]);
+  useEffect(()=>{
+    const runId=currentRun?.id;if(!runId||!sessionId||!['queued','running'].includes(currentRun.status))return;
+    let closed=false;
+    const tick=async()=>{
+      try{
+        const r=await fetch(`/api/chat-runs/${encodeURIComponent(runId)}`,{cache:'no-store'});if(!r.ok||closed)return;
+        const run=await r.json() as ChatRun;setCurrentRun(run);
+        if(run.status==='completed'){await loadSessionData(sessionId,false,true);setCurrentRun(null);await refreshSessions()}
+      }catch{}
+    };
+    const timer=window.setInterval(()=>void tick(),1500);
+    const wake=()=>{if(document.visibilityState==='visible')void tick()};
+    window.addEventListener('focus',wake);document.addEventListener('visibilitychange',wake);void tick();
+    return()=>{closed=true;window.clearInterval(timer);window.removeEventListener('focus',wake);document.removeEventListener('visibilitychange',wake)};
+    // Polling is keyed by persisted run identity/status; helper identity is intentionally excluded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[currentRun?.id,currentRun?.status,sessionId]);
 
-  const pending=account?.status==='pending';
-  const currentSession=sessions.find(x=>x.id===sessionId);
-  const effectiveThinkingMode:ThinkingMode=pending?'off':thinkingMode;
-  const thinkingIndex=Math.max(0,thinkingLevels.findIndex(x=>x.id===effectiveThinkingMode));
-  const thinking=thinkingLevels[thinkingIndex]||thinkingLevels[2];
-  const estimatedInput=useMemo(()=>{
-    const content=[...msgs.map(m=>m.text),text].join('\n');
-    const bytes=new TextEncoder().encode(content).length;
-    return Math.min(16000,Math.ceil(bytes/4)+256);
-  },[msgs,text]);
-  const estimatedVisible=Math.max(256,thinking.completion-thinking.reasoning);
-  const estimatedTotal=estimatedInput+thinking.completion;
   const updateThinkingMode=(next:ThinkingMode)=>{
     setThinkingMode(next);
     try{const p=JSON.parse(localStorage.getItem('daiki_preferences')||'{}');localStorage.setItem('daiki_preferences',JSON.stringify({...p,thinkingMode:next}))}catch{}
   };
-  const filteredSessions=useMemo(()=>{
-    const q=historyQuery.trim().toLowerCase();
-    return q?sessions.filter(s=>s.title.toLowerCase().includes(q)):sessions;
-  },[sessions,historyQuery]);
+  const copyMessage=async(value:string,key:string)=>{try{await navigator.clipboard.writeText(value);setCopiedKey(key);window.setTimeout(()=>setCopiedKey(''),1400)}catch{}};
   const refreshSessions=async()=>{const r=await fetch('/api/chat-sessions',{cache:'no-store'});if(r.ok){const d=await r.json() as {sessions:ChatSession[]};setSessions(d.sessions||[])}};
-  const newChat=()=>{if(busy)return;setSessionId('');setMsgs([]);setAttachments([]);setText('');setUploadError('');setHistoryOpen(false)};
-  const openSession=async(id:string)=>{
-    if(busy)return;
-    setHistoryBusy(true);
-    try{
-      const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{cache:'no-store'});
-      if(!r.ok)return;
-      const d=await r.json() as {session:ChatSession;messages:StoredMessage[]};
-      setSessionId(d.session.id);setModel(d.session.modelAlias||'auto');
-      setMsgs((d.messages||[]).map(m=>({role:m.role==='assistant'?'ai':'user',text:m.content})));
-      setAttachments([]);setText('');setHistoryOpen(false);
-    }finally{setHistoryBusy(false)}
+  const mapMessages=(messages:StoredMessage[],runs:ChatRun[])=>{const byRun=new Map(runs.map(run=>[run.id,run]));return messages.map(m=>({id:m.id,role:m.role==='assistant'?'ai' as const:'user' as const,text:m.content,runId:m.runId,run:m.runId?byRun.get(m.runId):undefined}))};
+  const loadSessionData=async(id:string,closeHistory=true,preserveComposer=false)=>{
+    const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{cache:'no-store'});if(!r.ok)return false;
+    const d=await r.json() as {session:ChatSession;messages:StoredMessage[];runs:ChatRun[]};const runs=d.runs||[];const latest=runs[runs.length-1];
+    setSessionId(d.session.id);setModel(d.session.modelAlias||'auto');setMsgs(mapMessages(d.messages||[],runs));
+    setCurrentRun(latest&&latest.status!=='completed'?latest:null);localStorage.setItem('daiki_current_session',d.session.id);
+    setAttachments([]);if(!preserveComposer)setText('');if(closeHistory)setHistoryOpen(false);return true;
   };
-  const deleteSession=async(id:string)=>{if(busy)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'DELETE'});if(r.ok){if(sessionId===id)newChat();await refreshSessions()}};
-  const renameSession=async(id:string)=>{
-    const title=renameText.trim();if(!title)return;
-    const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({title})});
-    if(r.ok){const updated=await r.json() as ChatSession;setSessions(xs=>xs.map(x=>x.id===id?updated:x));setRenamingId('');setRenameText('')}
-  };
+  const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setUploadError('');setHistoryOpen(false);setEditingMessageId(null);localStorage.removeItem('daiki_current_session')};
+  const openSession=async(id:string,closeHistory=true)=>{setHistoryBusy(true);try{await loadSessionData(id,closeHistory,false)}finally{setHistoryBusy(false)}};
+  const deleteSession=async(id:string)=>{if(id===sessionId&&runBlocking)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'DELETE'});if(r.ok){if(sessionId===id)newChat();await refreshSessions()}};
+  const renameSession=async(id:string)=>{const title=renameText.trim();if(!title)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({title})});if(r.ok){const updated=await r.json() as ChatSession;setSessions(xs=>xs.map(x=>x.id===id?updated:x));setRenamingId('');setRenameText('')}};
   const ensureSession=async(title:string)=>{
     if(sessionId)return sessionId;
     const r=await fetch('/api/chat-sessions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({title:title.slice(0,80)||'New chat',modelAlias:pending?'fast':model})});
     if(!r.ok)throw new Error('Could not create chat session');
-    const x=await r.json() as ChatSession;setSessionId(x.id);setSessions(old=>[x,...old]);return x.id;
+    const x=await r.json() as ChatSession;setSessionId(x.id);setSessions(old=>[x,...old]);localStorage.setItem('daiki_current_session',x.id);return x.id;
   };
-  const updateSessionModel=async(next:string)=>{
-    setModel(next);
-    if(!sessionId)return;
-    const r=await fetch(`/api/chat-sessions/${encodeURIComponent(sessionId)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({modelAlias:next})});
-    if(r.ok){const updated=await r.json() as ChatSession;setSessions(xs=>xs.map(x=>x.id===updated.id?updated:x))}
+  const updateSessionModel=async(next:string)=>{setModel(next);if(!sessionId)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(sessionId)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({modelAlias:next})});if(r.ok){const updated=await r.json() as ChatSession;setSessions(xs=>xs.map(x=>x.id===updated.id?updated:x))}};
+  const saveSessionMessage=async(id:string,role:'user'|'assistant',content:string,attachmentIds:string[]=[])=>{const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({role,content,attachmentIds})});if(!r.ok)throw new Error('Could not save chat history');return await r.json() as StoredMessage};
+  const startRun=async(id:string)=>{
+    const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}/runs`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({researchMode,thinkingMode:effectiveThinkingMode})});const d=await r.json().catch(()=>({})) as ChatRun&{error?:string;run?:ChatRun};
+    if(r.status===409&&d.run){setCurrentRun(d.run);return d.run}if(!r.ok)throw new Error(errorText(d.error)||'Could not start background run');setCurrentRun(d);return d;
   };
-  const saveSessionMessage=async(id:string,role:'user'|'assistant',content:string,attachmentIds:string[]=[])=>{const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({role,content,attachmentIds})});if(!r.ok)throw new Error('Could not save chat history')};
+  const controlRun=async(action:'pause'|'resume')=>{if(!currentRun)return;setBusy(true);try{const r=await fetch(`/api/chat-runs/${encodeURIComponent(currentRun.id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({action})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||'Could not update run');setCurrentRun(d as ChatRun)}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setBusy(false)}};
   const uploadOne=async(file:File,source:'file'|'image'|'folder')=>{const form=new FormData();form.set('file',file);form.set('source',source);form.set('relativePath',source==='folder'?rel(file):file.name);const r=await fetch('/api/attachments',{method:'POST',body:form});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||`Could not upload ${file.name}`);return d as Attachment};
-  const uploadFiles=async(files:FileList|File[],source:'file'|'image'|'folder')=>{
-    if(pending||busy)return;const list=Array.from(files);if(!list.length)return;
-    setAttachMenu(false);setUploadError('');setUploading(x=>x+list.length);
-    try{const uploaded:Attachment[]=[];for(const f of list)uploaded.push(await uploadOne(f,source));setAttachments(x=>[...x,...uploaded])}
-    catch(e){setUploadError(e instanceof Error?e.message:String(e))}
-    finally{setUploading(x=>Math.max(0,x-list.length))}
-  };
+  const uploadFiles=async(files:FileList|File[],source:'file'|'image'|'folder')=>{if(pending||runBlocking||localBusy)return;const list=Array.from(files);if(!list.length)return;setAttachMenu(false);setUploadError('');setUploading(x=>x+list.length);try{const uploaded:Attachment[]=[];for(const f of list)uploaded.push(await uploadOne(f,source));setAttachments(x=>[...x,...uploaded])}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setUploading(x=>Math.max(0,x-list.length))}};
   const removeAttachment=async(a:Attachment)=>{setAttachments(x=>x.filter(v=>v.id!==a.id));void fetch(`/api/attachments/${encodeURIComponent(a.id)}`,{method:'DELETE'}).catch(()=>{})};
   const send=async()=>{
-    if((!text.trim()&&!attachments.length)||busy||uploading>0)return;
-    setBusy(true);setAttachMenu(false);setUploadError('');
-    const q=text.trim();const currentAttachments=[...attachments];
-    const userMsg:Msg={role:'user',text:q||'Please review the attached content.',attachments:currentAttachments};
+    if((!text.trim()&&!attachments.length)||busy||uploading>0)return;setBusy(true);setAttachMenu(false);setUploadError('');
+    const q=text.trim();const currentAttachments=[...attachments];const content=q||'Please review the attached content.';
     try{
-      const history=[...msgs,userMsg];
-      const current=await ensureSession(userMsg.text);
-      await saveSessionMessage(current,'user',userMsg.text,currentAttachments.map(a=>a.id));
-      setMsgs([...history,{role:'ai',text:''}]);setText('');setAttachments([]);
-      const requestBase={model:pending?'fast':model,researchMode,thinkingMode:effectiveThinkingMode,messages:history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),attachmentIds:currentAttachments.map(a=>a.id)};
-      const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...requestBase,stream:true})});
-      if(!r.ok||!r.body){const d=await r.json().catch(()=>({error:'Gateway unavailable'}));const suffix=d.retryAfterSeconds?` Try again in ${d.retryAfterSeconds}s.`:'';throw new Error((errorText(d.error||d.detail)||'Gateway unavailable')+suffix)}
-      const researchSources=Number(r.headers.get('x-daiki-research-sources')||0);
-      const requestId=r.headers.get('x-daiki-request-id')||'';
-      if(researchSources>0)setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,researchSources}:m));
-      const reader=r.body.getReader();const dec=new TextDecoder();let buf='';let answer='';
-      let streamFailure:unknown=null;
-      try{
-        while(true){
-          const {done,value}=await reader.read();if(done)break;
-          buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';
-          for(const raw of lines){
-            const line=raw.trim();if(!line.startsWith('data:'))continue;
-            const data=line.slice(5).trim();if(!data||data==='[DONE]')continue;
-            try{const j=JSON.parse(data);if(j?.error)throw new Error(errorText(j.error));const chunk=j?.choices?.[0]?.delta?.content||'';if(chunk){answer+=chunk;setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,text:answer}:m))}if(j?.usage){const input=Number(j.usage.prompt_tokens||0);const completion=Number(j.usage.completion_tokens||0);const reasoning=Number(j.usage.completion_tokens_details?.reasoning_tokens||0);const usage:TokenUsage={input,reasoning,answer:Math.max(0,completion-reasoning),total:Number(j.usage.total_tokens||input+completion)};setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,tokenUsage:usage}:m))}}
-            catch(err){if(err instanceof Error&&err.message)throw err}
-          }
-        }
-      }catch(err){streamFailure=err}
-      if(streamFailure&&!answer){
-        const fallback=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json','x-daiki-retry-of':requestId},body:JSON.stringify({...requestBase,stream:false})});
-        const d=await fallback.json().catch(()=>({}));
-        if(!fallback.ok)throw streamFailure instanceof Error?streamFailure:new Error('Stream interrupted');
-        answer=String(d?.choices?.[0]?.message?.content||'');
-        const input=Number(d?.usage?.prompt_tokens||0);const completion=Number(d?.usage?.completion_tokens||0);const reasoning=Number(d?.usage?.completion_tokens_details?.reasoning_tokens||0);
-        if(answer)setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,text:answer,tokenUsage:{input,reasoning,answer:Math.max(0,completion-reasoning),total:Number(d?.usage?.total_tokens||input+completion)}}:m));
-      }else if(streamFailure){
-        setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,text:answer+'\n\n_Connection interrupted after a partial response._'}:m));
-      }
-      if(answer){await saveSessionMessage(current,'assistant',answer);await refreshSessions()}
-      else setMsgs(x=>x.map((m,i)=>i===x.length-1?{...m,text:'I didn’t get a response back. Please try again.'}:m));
-    }catch(e){
-      const message=e instanceof Error?e.message:String(e);
-      setMsgs(x=>{const last=x[x.length-1];if(last?.role==='ai'&&!last.text)return x.map((m,i)=>i===x.length-1?{...m,text:`I couldn’t connect: ${message}`}:m);return [...x,{role:'ai',text:`I couldn’t connect: ${message}`}]});
-    }finally{setBusy(false)}
+      const current=await ensureSession(content);const stored=await saveSessionMessage(current,'user',content,currentAttachments.map(a=>a.id));
+      setMsgs(old=>[...old,{id:stored.id,role:'user',text:stored.content,attachments:currentAttachments}]);setText('');setAttachments([]);await startRun(current);await refreshSessions();
+    }catch(e){setMsgs(old=>[...old,{role:'ai',text:`I couldn’t start the run: ${e instanceof Error?e.message:String(e)}`}])}finally{setBusy(false)}
   };
+  const editAndRetry=async(message:Msg,content:string)=>{
+    if(!sessionId||!message.id||busy)return;const next=content.trim();if(!next)return;setBusy(true);setUploadError('');
+    try{const r=await fetch(`/api/chat-sessions/${encodeURIComponent(sessionId)}/messages/${message.id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({content:next})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||'Could not edit message');setEditingMessageId(null);setEditText('');await loadSessionData(sessionId,false,true);await startRun(sessionId);await refreshSessions()}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setBusy(false)}
+  };
+  const retryFromAssistant=async(index:number)=>{for(let i=index-1;i>=0;i--){const m=msgs[i];if(m.role==='user'&&m.id){await editAndRetry(m,m.text);return}}};
   const submit=(e:FormEvent)=>{e.preventDefault();void send()};
 
   return <div className="chatPage">
@@ -214,7 +211,7 @@ export default function Chat(){
       <label className="historySearch"><Search size={15}/><input value={historyQuery} onChange={e=>setHistoryQuery(e.target.value)} placeholder="Search chats"/></label>
       <div className="historyList chatHistoryList">
         {filteredSessions.length?filteredSessions.map(s=><div key={s.id} className={`historyItem ${sessionId===s.id?'active':''}`}>
-          {renamingId===s.id?<form className="renameForm" onSubmit={e=>{e.preventDefault();void renameSession(s.id)}}><input autoFocus value={renameText} onChange={e=>setRenameText(e.target.value)} onBlur={()=>{if(renameText.trim())void renameSession(s.id);else setRenamingId('')}}/></form>:<button type="button" disabled={historyBusy||busy} onClick={()=>void openSession(s.id)}><History size={14}/><span><strong>{s.title}</strong><small>{new Date(s.updatedAt).toLocaleDateString()}</small></span></button>}
+          {renamingId===s.id?<form className="renameForm" onSubmit={e=>{e.preventDefault();void renameSession(s.id)}}><input autoFocus value={renameText} onChange={e=>setRenameText(e.target.value)} onBlur={()=>{if(renameText.trim())void renameSession(s.id);else setRenamingId('')}}/></form>:<button type="button" disabled={historyBusy} onClick={()=>void openSession(s.id)}><History size={14}/><span><strong>{s.title}</strong><small>{new Date(s.updatedAt).toLocaleDateString()}</small></span></button>}
           <div className="historyActions"><button type="button" aria-label={`Rename ${s.title}`} onClick={()=>{setRenamingId(s.id);setRenameText(s.title)}}><Pencil size={12}/></button><button type="button" aria-label={`Delete ${s.title}`} onClick={()=>void deleteSession(s.id)}><Trash2 size={12}/></button></div>
         </div>):<div className="historyEmpty">{historyQuery?'No matching chats':'Your chats will appear here.'}</div>}
       </div>
@@ -241,7 +238,16 @@ export default function Chat(){
       </header>
 
       <div className="chatScroll" ref={scrollRef} onDragOver={e=>{if(!pending)e.preventDefault()}} onDrop={e=>{if(pending)return;e.preventDefault();void uploadFiles(e.dataTransfer.files,'file')}}>
-        {!msgs.length?<div className="chatEmptyState"><div className="emptyMark">D</div><h1>What can I help with?</h1><p>Ask anything, research the web, or drop in files and project folders.</p><div className="promptStarters">{starters.map(([label,prompt])=><button key={label} type="button" onClick={()=>setText(prompt)}><span>{label}</span><small>{prompt}</small></button>)}</div></div>:<div className="messageFeed">{msgs.map((m,i)=><div key={i} className={`messageRow ${m.role}`}><div className="messageAvatar">{m.role==='ai'?'D':'You'}</div><div className="messageStack"><div className="bubble"><MessageContent message={m}/></div>{m.role==='ai'&&m.text?<div className="messageActions"><button type="button" aria-label="Copy response" onClick={()=>void copyAnswer(m.text,i)}>{copiedIndex===i?<Check size={13}/>:<Copy size={13}/>}<span>{copiedIndex===i?'Copied':'Copy'}</span></button></div>:null}{m.researchSources?<span className="researchBadge"><Globe2 size={12}/>Web searched · {m.researchSources} sources</span>:null}{m.tokenUsage?<span className="tokenUsageBadge"><Brain size={12}/>Tokens · {fmtTokens(m.tokenUsage.input)} in · {fmtTokens(m.tokenUsage.reasoning)} think · {fmtTokens(m.tokenUsage.answer)} answer · {fmtTokens(m.tokenUsage.total)} total</span>:null}{m.attachments?.length?<div className="sentAttachments">{m.attachments.map(a=><a key={a.id} className="sentAttachment" href={`/api/attachments/${encodeURIComponent(a.id)}`} target="_blank" rel="noreferrer">{a.mediaType.startsWith('image/')?<ImageIcon size={14}/>:a.source==='folder'?<FolderOpen size={14}/>:<File size={14}/>}<span>{a.relativePath}</span></a>)}</div>:null}</div></div>)}</div>}
+        {!msgs.length&&!currentRun?<div className="chatEmptyState"><div className="emptyMark">D</div><h1>What can I help with?</h1><p>Ask anything, research the web, or drop in files and project folders.</p><div className="promptStarters">{starters.map(([label,prompt])=><button key={label} type="button" onClick={()=>setText(prompt)}><span>{label}</span><small>{prompt}</small></button>)}</div></div>:<div className="messageFeed">
+          {msgs.map((m,i)=>{const copyKey=`${m.role}-${m.id??i}`;const tokens=m.run?.activity?.tokens;const research=m.run?.activity?.research;return <div key={copyKey} className={`messageRow ${m.role}`}><div className="messageAvatar">{m.role==='ai'?'D':'You'}</div><div className="messageStack"><div className="bubble">{m.role==='user'&&editingMessageId===m.id?<div className="messageEditor"><textarea autoFocus value={editText} onChange={e=>setEditText(e.target.value)} rows={Math.min(8,Math.max(2,editText.split('\n').length))}/><div><button type="button" onClick={()=>{setEditingMessageId(null);setEditText('')}}>Cancel</button><button type="button" className="primary" onClick={()=>void editAndRetry(m,editText)}>Save & Retry</button></div></div>:<MessageContent message={m}/>}</div>
+            {m.text?<div className="messageActions"><button type="button" aria-label="Copy message" onClick={()=>void copyMessage(m.text,copyKey)}>{copiedKey===copyKey?<Check size={13}/>:<Copy size={13}/>}<span>{copiedKey===copyKey?'Copied':'Copy'}</span></button>{m.role==='user'&&m.id?<button type="button" disabled={busy} onClick={()=>{setEditingMessageId(m.id!);setEditText(m.text)}}><Pencil size={13}/><span>Edit</span></button>:null}{m.role==='ai'?<button type="button" disabled={busy} onClick={()=>void retryFromAssistant(i)}><RotateCcw size={13}/><span>Retry</span></button>:null}</div>:null}
+            {research?.used?<span className="researchBadge"><Globe2 size={12}/>Web searched · {research.sources?.length||research.sourceCount||0} sources</span>:null}
+            {tokens?<span className="tokenUsageBadge"><Brain size={12}/>Tokens · {fmtTokens(tokens.input)} in · {fmtTokens(tokens.reasoning)} think · {fmtTokens(tokens.answer)} answer · {fmtTokens(tokens.total)} total</span>:null}
+            {m.run?<RunActivityDetails run={m.run}/>:null}
+            {m.attachments?.length?<div className="sentAttachments">{m.attachments.map(a=><a key={a.id} className="sentAttachment" href={`/api/attachments/${encodeURIComponent(a.id)}`} target="_blank" rel="noreferrer">{a.mediaType.startsWith('image/')?<ImageIcon size={14}/>:a.source==='folder'?<FolderOpen size={14}/>:<File size={14}/>}<span>{a.relativePath}</span></a>)}</div>:null}
+          </div></div>})}
+          {currentRun&&currentRun.status!=='completed'?<div className="messageRow ai runMessage"><div className="messageAvatar">D</div><div className="messageStack"><div className="bubble">{currentRun.status==='queued'||currentRun.status==='running'?<div className="backgroundRunStatus"><div className="typingDots" aria-label="Daiki is working in background"><i/><i/><i/></div><span>{currentRun.status==='queued'?'Queued for processing':'Working in background — you can leave this page.'}</span></div>:currentRun.status==='paused'?<div className="backgroundRunStatus"><Pause size={15}/><span>Paused</span></div>:<div className="backgroundRunStatus error"><span>{currentRun.error||'Run stopped before completion.'}</span></div>}</div><div className="runControls">{currentRun.status==='running'||currentRun.status==='queued'?<button type="button" disabled={localBusy} onClick={()=>void controlRun('pause')}><Pause size={13}/>Pause</button>:currentRun.status==='paused'||currentRun.status==='failed'||currentRun.status==='cancelled'?<button type="button" disabled={localBusy} onClick={()=>void controlRun('resume')}><Play size={13}/>Play</button>:null}</div><RunActivityDetails run={currentRun}/></div></div>:null}
+        </div>}
       </div>
 
       <div className="composerDock">
