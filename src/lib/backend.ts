@@ -8,7 +8,7 @@ export async function backendFetch(path:string,init:RequestInit={}){
   if(!base()) throw new Error('DAIKI_BACKEND_URL is not configured');
   const headers=new Headers(init.headers);
   headers.set('authorization',`Bearer ${session.accessToken}`);
-  if(init.body&&!headers.has('content-type')) headers.set('content-type','application/json');
+  if(typeof init.body==='string'&&!headers.has('content-type')) headers.set('content-type','application/json');
   return fetch(`${base()}${path}`,{...init,headers,cache:'no-store'});
 }
 
