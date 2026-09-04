@@ -160,3 +160,29 @@
 @media(max-width:390px){
   .messageFeed{padding-left:12px;padding-right:12px}.messageRow.user{padding-left:28px}.chatTopbarControls select{min-width:76px;font-size:9px}.messageRow.ai .bubble{font-size:14.5px}.messageRow.ai .markdownBody h1{font-size:19px}.messageRow.ai .markdownBody h2{font-size:17px}
 }
+
+/* Unified navigation: chat history and normal app navigation share one sidebar. */
+.chatShell{grid-template-columns:274px minmax(0,1fr)}
+.chatShell .appSidebar{padding:12px 10px}
+.chatShell .sidebarScroll{display:flex;flex-direction:column;min-height:0}
+.chatSidebarSlot{display:flex;flex:0 1 48%;min-height:220px;flex-direction:column;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--line)}
+.chatSidebarSlot .chatHistoryHead{flex:0 0 auto}
+.chatSidebarSlot .historySearch{flex:0 0 auto}
+.chatSidebarSlot .chatHistoryList{flex:1 1 auto;min-height:0;overflow:auto;margin:2px 0 6px}
+.chatSidebarSlot .chatHistoryFoot{flex:0 0 auto}
+.chatShell .appSidebar .navGroup{margin-bottom:12px}
+.chatShell .main:has(.chatPage){height:100vh}
+.chatShell .chatPage{grid-template-columns:1fr}
+.chatShell .chatHistory,.chatShell .chatHistoryBackdrop{display:none!important}
+@media(max-width:900px){
+  .chatShell{grid-template-columns:1fr}
+  .chatShell .main:has(.chatPage){height:calc(100dvh - 56px - env(safe-area-inset-top))}
+  .chatShell .appSidebar{padding:14px 12px 12px}
+  .chatSidebarSlot{flex-basis:auto;min-height:260px;max-height:48dvh}
+  .chatShell .appSidebar .sidebarScroll{overflow-y:auto}
+  .chatShell .historyToggle{display:grid}
+}
+@media(max-width:620px){
+  .chatSidebarSlot{min-height:230px;max-height:44dvh}
+  .chatSidebarSlot .historySearch{margin-top:8px}
+}

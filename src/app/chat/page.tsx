@@ -1,6 +1,7 @@
 'use client';
 
 import {FormEvent,useEffect,useMemo,useRef,useState} from 'react';
+import {createPortal} from 'react-dom';
 import {Brain,Check,Copy,File,FolderOpen,Globe2,History,Image as ImageIcon,Menu,Paperclip,Pause,Pencil,Play,Plus,RotateCcw,Search,Send,Trash2,X} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -113,7 +114,7 @@ export default function Chat(){
   const [sessionId,setSessionId]=useState('');
   const [historyBusy,setHistoryBusy]=useState(false);
   const [historyQuery,setHistoryQuery]=useState('');
-  const [historyOpen,setHistoryOpen]=useState(false);
+  const [sidebarTarget,setSidebarTarget]=useState<HTMLElement|null>(null);
   const [renamingId,setRenamingId]=useState('');
   const [renameText,setRenameText]=useState('');
   const [editingMessageId,setEditingMessageId]=useState<number|null>(null);
@@ -178,9 +179,10 @@ export default function Chat(){
     // Session restore is intentionally mount-only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
+  useEffect(()=>{setSidebarTarget(document.getElementById('chat-sidebar-slot'))},[]);
   useEffect(()=>{scrollRef.current?.scrollTo({top:scrollRef.current.scrollHeight,behavior:'smooth'})},[msgs,currentRun?.status]);
   useEffect(()=>{const el=textareaRef.current;if(!el)return;el.style.height='auto';el.style.height=`${Math.min(el.scrollHeight,180)}px`},[text]);
-  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setHistoryOpen(false);setAttachMenu(false);setEditingMessageId(null)}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[]);
+  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setAttachMenu(false);setEditingMessageId(null)}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[]);
   useEffect(()=>{if(!quota?.resetAt)return;const timer=window.setInterval(()=>setQuotaClock(Date.now()),1000);return()=>window.clearInterval(timer)},[quota?.resetAt]);
   useEffect(()=>{const timer=window.setInterval(()=>void refreshUsage(),20000);const wake=()=>{if(document.visibilityState==='visible')void refreshUsage()};window.addEventListener('focus',wake);document.addEventListener('visibilitychange',wake);return()=>{window.clearInterval(timer);window.removeEventListener('focus',wake);document.removeEventListener('visibilitychange',wake)}},[]);
   useEffect(()=>{
@@ -247,9 +249,9 @@ export default function Chat(){
     const d=await r.json() as {session:ChatSession;messages:StoredMessage[];runs:ChatRun[]};const runs=d.runs||[];const latest=runs[runs.length-1];
     setSessionId(d.session.id);setModel(d.session.modelAlias||'auto');setMsgs(mapMessages(d.messages||[],runs));
     setCurrentRun(latest&&latest.status!=='completed'?latest:null);localStorage.setItem('daiki_current_session',d.session.id);
-    setAttachments([]);if(!preserveComposer)setText('');if(closeHistory)setHistoryOpen(false);return true;
+    setAttachments([]);if(!preserveComposer)setText('');if(closeHistory)window.dispatchEvent(new Event('daiki-close-navigation'));return true;
   };
-  const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setUploadError('');setHistoryOpen(false);setEditingMessageId(null);localStorage.removeItem('daiki_current_session')};
+  const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setUploadError('');setEditingMessageId(null);localStorage.removeItem('daiki_current_session');window.dispatchEvent(new Event('daiki-close-navigation'))};
   const openSession=async(id:string,closeHistory=true)=>{setHistoryBusy(true);try{await loadSessionData(id,closeHistory,false)}finally{setHistoryBusy(false)}};
   const deleteSession=async(id:string)=>{if(id===sessionId&&runBlocking)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'DELETE'});if(r.ok){if(sessionId===id)newChat();await refreshSessions()}};
   const renameSession=async(id:string)=>{const title=renameText.trim();if(!title)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({title})});if(r.ok){const updated=await r.json() as ChatSession;setSessions(xs=>xs.map(x=>x.id===id?updated:x));setRenamingId('');setRenameText('')}};
@@ -284,23 +286,23 @@ export default function Chat(){
   const retryFromAssistant=async(index:number)=>{for(let i=index-1;i>=0;i--){const m=msgs[i];if(m.role==='user'&&m.id){await editAndRetry(m,m.text);return}}};
   const submit=(e:FormEvent)=>{e.preventDefault();void send()};
 
-  return <div className="chatPage">
-    {historyOpen?<button className="chatHistoryBackdrop" aria-label="Close history" onClick={()=>setHistoryOpen(false)}/>:null}
-    <aside className={`chatHistory ${historyOpen?'open':''}`}>
-      <div className="chatHistoryHead"><button className="newChatButton" type="button" onClick={newChat}><Plus size={17}/><span>New chat</span></button><button className="historyClose" type="button" aria-label="Close history" onClick={()=>setHistoryOpen(false)}><X size={18}/></button></div>
-      <label className="historySearch"><Search size={15}/><input value={historyQuery} onChange={e=>setHistoryQuery(e.target.value)} placeholder="Search chats"/></label>
-      <div className="historyList chatHistoryList">
-        {filteredSessions.length?filteredSessions.map(s=><div key={s.id} className={`historyItem ${sessionId===s.id?'active':''}`}>
-          {renamingId===s.id?<form className="renameForm" onSubmit={e=>{e.preventDefault();void renameSession(s.id)}}><input autoFocus value={renameText} onChange={e=>setRenameText(e.target.value)} onBlur={()=>{if(renameText.trim())void renameSession(s.id);else setRenamingId('')}}/></form>:<button type="button" disabled={historyBusy} onClick={()=>void openSession(s.id)}><History size={14}/><span><strong>{s.title}</strong><small>{new Date(s.updatedAt).toLocaleDateString()}</small></span></button>}
-          <div className="historyActions"><button type="button" aria-label={`Rename ${s.title}`} onClick={()=>{setRenamingId(s.id);setRenameText(s.title)}}><Pencil size={12}/></button><button type="button" aria-label={`Delete ${s.title}`} onClick={()=>void deleteSession(s.id)}><Trash2 size={12}/></button></div>
-        </div>):<div className="historyEmpty">{historyQuery?'No matching chats':'Your chats will appear here.'}</div>}
-      </div>
-      {capabilities?<div className="chatHistoryFoot"><span>Smart Assist</span><strong>On</strong><small>{capabilities.skills.length} skills · {capabilities.tools.length} tools</small></div>:null}
-    </aside>
+  const chatSidebar=<>
+    <div className="chatHistoryHead"><button className="newChatButton" type="button" onClick={newChat}><Plus size={17}/><span>New chat</span></button></div>
+    <label className="historySearch"><Search size={15}/><input value={historyQuery} onChange={e=>setHistoryQuery(e.target.value)} placeholder="Search chats"/></label>
+    <div className="historyList chatHistoryList">
+      {filteredSessions.length?filteredSessions.map(s=><div key={s.id} className={`historyItem ${sessionId===s.id?'active':''}`}>
+        {renamingId===s.id?<form className="renameForm" onSubmit={e=>{e.preventDefault();void renameSession(s.id)}}><input autoFocus value={renameText} onChange={e=>setRenameText(e.target.value)} onBlur={()=>{if(renameText.trim())void renameSession(s.id);else setRenamingId('')}}/></form>:<button type="button" disabled={historyBusy} onClick={()=>void openSession(s.id)}><History size={14}/><span><strong>{s.title}</strong><small>{new Date(s.updatedAt).toLocaleDateString()}</small></span></button>}
+        <div className="historyActions"><button type="button" aria-label={`Rename ${s.title}`} onClick={()=>{setRenamingId(s.id);setRenameText(s.title)}}><Pencil size={12}/></button><button type="button" aria-label={`Delete ${s.title}`} onClick={()=>void deleteSession(s.id)}><Trash2 size={12}/></button></div>
+      </div>):<div className="historyEmpty">{historyQuery?'No matching chats':'Your chats will appear here.'}</div>}
+    </div>
+    {capabilities?<div className="chatHistoryFoot"><span>Smart Assist</span><strong>On</strong><small>{capabilities.skills.length} skills · {capabilities.tools.length} tools</small></div>:null}
+  </>
 
+  return <div className="chatPage">
+    {sidebarTarget?createPortal(chatSidebar,sidebarTarget):null}
     <section className="chatStage">
       <header className="chatTopbar">
-        <div className="chatTopbarTitle"><button className="iconButton historyToggle" type="button" aria-label="Open chat history" onClick={()=>setHistoryOpen(true)}><Menu size={19}/></button><div><strong>{currentSession?.title||'New chat'}</strong><small>{busy?'Daiki is thinking…':'Daiki AI Passport'}</small></div></div>
+        <div className="chatTopbarTitle"><button className="iconButton historyToggle" type="button" aria-label="Open navigation" onClick={()=>window.dispatchEvent(new Event('daiki-open-navigation'))}><Menu size={19}/></button><div><strong>{currentSession?.title||'New chat'}</strong><small>{busy?'Daiki is thinking…':'Daiki AI Passport'}</small></div></div>
         <div className="chatTopbarControls">
           {quota?.mode==='limited'&&!quotaIndicatorHidden?<details className={`quotaControl ${quotaBlocked?'blocked':''}`}>
             <summary><span className="quotaStatusDot"/><span>{quotaBlocked?'Quota blocked':`Quota · ${fmtTokens(Number(quota.remaining||0))} left`}</span></summary>
