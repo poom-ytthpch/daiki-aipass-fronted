@@ -1,7 +1,7 @@
 import {backendFetch} from '@/lib/backend';
 type Pending={tokenLimitPerDay:number;requestsPerHour:number;minIntervalSeconds:number;maxCompletionTokens:number};
 type Me={status:string;pendingChatPolicy?:Pending};
-type Usage={usage?:{inputTokens?:number;outputTokens?:number;totalTokens?:number};quota?:{mode?:string;limit?:number;used?:number;remaining?:number;resetAt?:string;interval?:string}};
+type Usage={usage?:{inputTokens?:number;outputTokens?:number;totalTokens?:number};quota?:{mode?:string;limit?:number;used?:number;remaining?:number;resetAt?:string;interval?:string;resetCredits?:{available?:number;nextExpiry?:string;lastResetAt?:string}}};
 const fmt=(n?:number)=>new Intl.NumberFormat('en-US').format(n||0);
 export default async function Plan(){
  let me:Me|null=null;let usage:Usage|null=null;

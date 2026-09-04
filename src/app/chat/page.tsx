@@ -8,7 +8,9 @@ import remarkGfm from 'remark-gfm';
 type Attachment={id:string;name:string;relativePath:string;source:'file'|'image'|'folder';mediaType:string;sizeBytes:number;extractStatus:string;createdAt:string};
 type TokenUsage={input:number;reasoning:number;answer:number;total:number};
 type RunSource={index?:number;title?:string;url?:string;engine?:string;snippet?:string};
-type QuotaState={mode?:string;limit?:number;used?:number;remaining?:number;resetAt?:string;interval?:string};
+type ResetGrant={id:number;remainingResets:number;expiresAt:string;note?:string};
+type ResetCredits={available:number;nextExpiry?:string;lastResetAt?:string;grants?:ResetGrant[]};
+type QuotaState={mode?:string;limit?:number;used?:number;remaining?:number;resetAt?:string;interval?:string;windowStart?:string;resetCredits?:ResetCredits};
 type UsageResponse={usage?:{inputTokens?:number;outputTokens?:number;totalTokens?:number};quota?:QuotaState};
 type RunActivity={phase?:string;durationMs?:number;requestId?:string;httpStatus?:number;retryAfterSeconds?:number;quota?:QuotaState;research?:{mode?:string;query?:string;used?:boolean;error?:string;sourceCount?:number;sources?:RunSource[]};thinking?:{mode?:string;reasoningBudget?:number;estimate?:unknown};tokens?:TokenUsage};
 type ChatRun={id:string;sessionId:string;status:'queued'|'running'|'paused'|'completed'|'failed'|'cancelled';researchMode:string;thinkingMode:string;requestId?:string;content:string;error?:string;activity?:RunActivity;createdAt:string;startedAt?:string;completedAt?:string;updatedAt:string};
@@ -95,6 +97,7 @@ export default function Chat(){
   const [copiedKey,setCopiedKey]=useState('');
   const [usageInfo,setUsageInfo]=useState<UsageResponse|null>(null);
   const [quotaClock,setQuotaClock]=useState(Date.now());
+  const [resetBusy,setResetBusy]=useState(false);
   const fileRef=useRef<HTMLInputElement>(null);
   const imageRef=useRef<HTMLInputElement>(null);
   const folderRef=useRef<HTMLInputElement>(null);
@@ -107,6 +110,9 @@ export default function Chat(){
   const currentSession=sessions.find(x=>x.id===sessionId);
   const quota=usageInfo?.quota;
   const quotaExhausted=quota?.mode==='limited'&&Number(quota.remaining||0)<=0;
+  const quotaBlocked=quotaExhausted||currentRun?.error==='quota_exhausted';
+  const resetCredits=quota?.resetCredits;
+  const resetsAvailable=Number(resetCredits?.available||0);
   const resetRemainingMs=quota?.resetAt?Math.max(0,new Date(quota.resetAt).getTime()-quotaClock):0;
   const resetRemainingLabel=resetRemainingMs>0?`${Math.floor(resetRemainingMs/60000)}m ${Math.floor((resetRemainingMs%60000)/1000)}s`:'now';
   const effectiveThinkingMode:ThinkingMode=pending?'off':thinkingMode;
@@ -171,6 +177,7 @@ export default function Chat(){
   };
   const copyMessage=async(value:string,key:string)=>{try{await navigator.clipboard.writeText(value);setCopiedKey(key);window.setTimeout(()=>setCopiedKey(''),1400)}catch{}};
   const refreshUsage=async()=>{try{const r=await fetch('/api/usage',{cache:'no-store'});if(r.ok)setUsageInfo(await r.json() as UsageResponse)}catch{}};
+  const redeemQuotaReset=async()=>{if(resetBusy||resetsAvailable<=0)return;setResetBusy(true);setUploadError('');try{const r=await fetch('/api/quota-resets/use',{method:'POST'});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||'Could not use reset');await refreshUsage();if(currentRun?.error==='quota_exhausted')await controlRun('resume')}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setResetBusy(false)}};
   const refreshSessions=async()=>{const r=await fetch('/api/chat-sessions',{cache:'no-store'});if(r.ok){const d=await r.json() as {sessions:ChatSession[]};setSessions(d.sessions||[])}};
   const mapMessages=(messages:StoredMessage[],runs:ChatRun[])=>{const byRun=new Map(runs.map(run=>[run.id,run]));return messages.map(m=>({id:m.id,role:m.role==='assistant'?'ai' as const:'user' as const,text:m.content,runId:m.runId,run:m.runId?byRun.get(m.runId):undefined}))};
   const loadSessionData=async(id:string,closeHistory=true,preserveComposer=false)=>{
@@ -201,7 +208,7 @@ export default function Chat(){
   const uploadFiles=async(files:FileList|File[],source:'file'|'image'|'folder')=>{if(pending||runBlocking||localBusy)return;const list=Array.from(files);if(!list.length)return;setAttachMenu(false);setUploadError('');setUploading(x=>x+list.length);try{const uploaded:Attachment[]=[];for(const f of list)uploaded.push(await uploadOne(f,source));setAttachments(x=>[...x,...uploaded])}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setUploading(x=>Math.max(0,x-list.length))}};
   const removeAttachment=async(a:Attachment)=>{setAttachments(x=>x.filter(v=>v.id!==a.id));void fetch(`/api/attachments/${encodeURIComponent(a.id)}`,{method:'DELETE'}).catch(()=>{})};
   const send=async()=>{
-    if((!text.trim()&&!attachments.length)||busy||uploading>0||quotaExhausted)return;setBusy(true);setAttachMenu(false);setUploadError('');
+    if((!text.trim()&&!attachments.length)||busy||uploading>0||quotaBlocked)return;setBusy(true);setAttachMenu(false);setUploadError('');
     const q=text.trim();const currentAttachments=[...attachments];const content=q||'Please review the attached content.';
     try{
       const current=await ensureSession(content);const stored=await saveSessionMessage(current,'user',content,currentAttachments.map(a=>a.id));
@@ -262,11 +269,11 @@ export default function Chat(){
       </div>
 
       <div className="composerDock">
-        {quota?.mode==='limited'?<div className={`notice ${quotaExhausted?'quotaNoticeExhausted':'butter'} quotaNotice`}><strong>{quotaExhausted?'Token quota used up':`${fmtTokens(Number(quota.used||usageInfo?.usage?.totalTokens||0))} / ${fmtTokens(Number(quota.limit||0))} tokens used`}</strong><span>{quotaExhausted?`Try again after reset${quota.resetAt?` in ${resetRemainingLabel} (${new Date(quota.resetAt).toLocaleTimeString()})`:''}`:`${fmtTokens(Number(quota.remaining||0))} remaining · resets ${quota.resetAt?new Date(quota.resetAt).toLocaleTimeString():'—'}`}</span></div>:null}
+        {quota?.mode==='limited'?<div className={`notice ${quotaBlocked?'quotaNoticeExhausted':'butter'} quotaNotice`}><div><strong>{quotaBlocked?'Token quota blocked':`${fmtTokens(Number(quota.used||usageInfo?.usage?.totalTokens||0))} / ${fmtTokens(Number(quota.limit||0))} tokens used`}</strong><span>{quotaBlocked?`Natural reset${quota.resetAt?` in ${resetRemainingLabel} (${new Date(quota.resetAt).toLocaleTimeString()})`:''}`:`${fmtTokens(Number(quota.remaining||0))} remaining · resets ${quota.resetAt?new Date(quota.resetAt).toLocaleTimeString():'—'}`}</span>{resetsAvailable>0?<small>{resetsAvailable} reset{resetsAvailable===1?'':'s'} available{resetCredits?.nextExpiry?` · expires ${new Date(resetCredits.nextExpiry).toLocaleString()}`:''}</small>:null}</div>{quotaBlocked&&resetsAvailable>0?<button type="button" className="btn compact primary" disabled={resetBusy} onClick={()=>void redeemQuotaReset()}>{resetBusy?'Resetting…':'Use 1 reset & retry'}</button>:null}</div>:null}
         <form className="composerBox" onSubmit={submit}>
           {attachments.length||uploading?<div className="attachmentTray">{attachments.map(a=><div className="attachmentChip" key={a.id}><span className="attachmentIcon">{a.mediaType.startsWith('image/')?<ImageIcon size={16}/>:a.source==='folder'?<FolderOpen size={16}/>:<File size={16}/>}</span><div><strong>{a.name}</strong><small>{a.source==='folder'?a.relativePath:size(a.sizeBytes)} · {a.extractStatus}</small></div><button type="button" aria-label={`Remove ${a.name}`} onClick={()=>void removeAttachment(a)}><X size={14}/></button></div>)}{uploading?<div className="attachmentChip uploading"><span className="attachmentIcon"><Paperclip size={16}/></span><div><strong>Uploading…</strong><small>{uploading} file{uploading>1?'s':''}</small></div></div>:null}</div>:null}
           {uploadError?<div className="attachmentError">{uploadError}</div>:null}
-          <div className="composerRow"><div className="attachmentMenuWrap"><button className="attachBtn" type="button" aria-label="Add attachment" disabled={pending||busy} onClick={()=>setAttachMenu(x=>!x)}><Plus size={20}/></button>{attachMenu?<div className="attachmentMenu"><button type="button" onClick={()=>imageRef.current?.click()}><ImageIcon size={17}/><span><strong>Image</strong><small>PNG, JPEG, WebP and more</small></span></button><button type="button" onClick={()=>fileRef.current?.click()}><File size={17}/><span><strong>File</strong><small>Text, code, data or documents</small></span></button><button type="button" onClick={()=>folderRef.current?.click()}><FolderOpen size={17}/><span><strong>Folder</strong><small>Upload a project directory</small></span></button></div>:null}</div><textarea ref={textareaRef} className="chatInput" rows={1} value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send()}}} placeholder={pending?'Message Daiki…':'Message Daiki'}/><button className="sendBtn" aria-label="Send message" disabled={busy||uploading>0||quotaExhausted||(!text.trim()&&!attachments.length)} type="submit"><Send size={18}/></button></div>
+          <div className="composerRow"><div className="attachmentMenuWrap"><button className="attachBtn" type="button" aria-label="Add attachment" disabled={pending||busy} onClick={()=>setAttachMenu(x=>!x)}><Plus size={20}/></button>{attachMenu?<div className="attachmentMenu"><button type="button" onClick={()=>imageRef.current?.click()}><ImageIcon size={17}/><span><strong>Image</strong><small>PNG, JPEG, WebP and more</small></span></button><button type="button" onClick={()=>fileRef.current?.click()}><File size={17}/><span><strong>File</strong><small>Text, code, data or documents</small></span></button><button type="button" onClick={()=>folderRef.current?.click()}><FolderOpen size={17}/><span><strong>Folder</strong><small>Upload a project directory</small></span></button></div>:null}</div><textarea ref={textareaRef} className="chatInput" rows={1} value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send()}}} placeholder={pending?'Message Daiki…':'Message Daiki'}/><button className="sendBtn" aria-label="Send message" disabled={busy||uploading>0||quotaBlocked||(!text.trim()&&!attachments.length)} type="submit"><Send size={18}/></button></div>
           <input ref={imageRef} hidden type="file" accept="image/*" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'image');e.currentTarget.value=''}}/><input ref={fileRef} hidden type="file" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'file');e.currentTarget.value=''}}/><input ref={folderRef} hidden type="file" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'folder');e.currentTarget.value=''}}/>
         </form>
         <div className="composerHint">Daiki can make mistakes. Check important information.</div>
