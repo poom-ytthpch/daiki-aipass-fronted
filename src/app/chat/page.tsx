@@ -111,7 +111,9 @@ export default function Chat(){
   const currentSession=sessions.find(x=>x.id===sessionId);
   const quota=usageInfo?.quota;
   const quotaExhausted=quota?.mode==='limited'&&Number(quota.remaining||0)<=0;
-  const quotaBlocked=quotaExhausted||currentRun?.error==='quota_exhausted';
+  // Keep a failed run's historical error visible, but do not let that stale
+  // error lock the composer after a user/admin reset has restored quota.
+  const quotaBlocked=quotaExhausted||(usageInfo==null&&currentRun?.error==='quota_exhausted');
   const resetCredits=quota?.resetCredits;
   const resetsAvailable=Number(resetCredits?.available||0);
   const resetRemainingMs=quota?.resetAt?Math.max(0,new Date(quota.resetAt).getTime()-quotaClock):0;
