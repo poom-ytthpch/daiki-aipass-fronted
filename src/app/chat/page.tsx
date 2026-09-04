@@ -10,7 +10,8 @@ type TokenUsage={input:number;reasoning:number;answer:number;total:number};
 type RunSource={index?:number;title?:string;url?:string;engine?:string;snippet?:string};
 type ResetGrant={id:number;remainingResets:number;totalResets?:number;expiresAt:string;createdAt?:string;note?:string};
 type ResetCredits={available:number;nextExpiry?:string;lastResetAt?:string;grants?:ResetGrant[]};
-type QuotaState={mode?:string;limit?:number;used?:number;remaining?:number;resetAt?:string;interval?:string;windowStart?:string;resetCredits?:ResetCredits};
+type QuotaLimitState={id:string;primary?:boolean;limit:number;used:number;remaining:number;resetAt?:string;interval:string;intervalCount?:number;windowStart?:string};
+type QuotaState={mode?:string;limit?:number;used?:number;remaining?:number;resetAt?:string;interval?:string;intervalCount?:number;windowStart?:string;blocked?:boolean;blockingLimitId?:string;limits?:QuotaLimitState[];resetCredits?:ResetCredits};
 type UsageResponse={usage?:{inputTokens?:number;outputTokens?:number;totalTokens?:number};quota?:QuotaState};
 type RunActivity={phase?:string;durationMs?:number;requestId?:string;httpStatus?:number;retryAfterSeconds?:number;quota?:QuotaState;research?:{mode?:string;query?:string;used?:boolean;error?:string;sourceCount?:number;sources?:RunSource[]};thinking?:{mode?:string;reasoningBudget?:number;estimate?:unknown};tokens?:TokenUsage};
 type ChatRun={id:string;sessionId:string;status:'queued'|'running'|'paused'|'completed'|'failed'|'cancelled';researchMode:string;thinkingMode:string;requestId?:string;content:string;error?:string;activity?:RunActivity;createdAt:string;startedAt?:string;completedAt?:string;updatedAt:string};
@@ -110,7 +111,7 @@ export default function Chat(){
   const pending=account?.status==='pending';
   const currentSession=sessions.find(x=>x.id===sessionId);
   const quota=usageInfo?.quota;
-  const quotaExhausted=quota?.mode==='limited'&&Number(quota.remaining||0)<=0;
+  const quotaExhausted=quota?.mode==='limited'&&(quota.blocked??Number(quota.remaining||0)<=0);
   // Keep a failed run's historical error visible, but do not let that stale
   // error lock the composer after a user/admin reset has restored quota.
   const quotaBlocked=quotaExhausted||(usageInfo==null&&currentRun?.error==='quota_exhausted');
@@ -118,6 +119,7 @@ export default function Chat(){
   const resetsAvailable=Number(resetCredits?.available||0);
   const resetRemainingMs=quota?.resetAt?Math.max(0,new Date(quota.resetAt).getTime()-quotaClock):0;
   const resetRemainingLabel=resetRemainingMs>0?`${Math.floor(resetRemainingMs/60000)}m ${Math.floor((resetRemainingMs%60000)/1000)}s`:'now';
+  const quotaLimitSummary=(quota?.limits||[]).map(l=>`${fmtTokens(l.used)} / ${fmtTokens(l.limit)} ${l.interval}${l.interval==='hour'&&Number(l.intervalCount||1)>1?` (every ${l.intervalCount}h)`:''}`).join(' · ');
   const effectiveThinkingMode:ThinkingMode=pending?'off':thinkingMode;
   const thinkingIndex=Math.max(0,thinkingLevels.findIndex(x=>x.id===effectiveThinkingMode));
   const thinking=thinkingLevels[thinkingIndex]||thinkingLevels[2];
@@ -275,7 +277,7 @@ export default function Chat(){
       <div className="composerDock">
         {resetGiftNotice?<div className="notice resetGiftNotice"><div><strong>Quota reset received</strong><span>{resetGiftNotice}</span></div><button type="button" className="btn compact ghost" onClick={()=>setResetGiftNotice('')}>Got it</button></div>:null}
         {!quotaBlocked&&resetsAvailable>0?<div className="notice resetGiftNotice persistent"><div><strong>{resetsAvailable} quota reset{resetsAvailable===1?'':'s'} available</strong><span>Use one when your token quota is blocked{resetCredits?.nextExpiry?` · earliest expiry ${new Date(resetCredits.nextExpiry).toLocaleString()}`:''}</span></div></div>:null}
-        {quota?.mode==='limited'?<div className={`notice ${quotaBlocked?'quotaNoticeExhausted':'butter'} quotaNotice`}><div><strong>{quotaBlocked?'Token quota blocked':`${fmtTokens(Number(quota.used||usageInfo?.usage?.totalTokens||0))} / ${fmtTokens(Number(quota.limit||0))} tokens used`}</strong><span>{quotaBlocked?`Natural reset${quota.resetAt?` in ${resetRemainingLabel} (${new Date(quota.resetAt).toLocaleTimeString()})`:''}`:`${fmtTokens(Number(quota.remaining||0))} remaining · resets ${quota.resetAt?new Date(quota.resetAt).toLocaleTimeString():'—'}`}</span>{resetsAvailable>0?<small>{resetsAvailable} reset{resetsAvailable===1?'':'s'} available{resetCredits?.nextExpiry?` · expires ${new Date(resetCredits.nextExpiry).toLocaleString()}`:''}</small>:null}</div>{quotaBlocked&&resetsAvailable>0?<button type="button" className="btn compact primary" disabled={resetBusy} onClick={()=>void redeemQuotaReset()}>{resetBusy?'Resetting…':'Use 1 reset & retry'}</button>:null}</div>:null}
+        {quota?.mode==='limited'?<div className={`notice ${quotaBlocked?'quotaNoticeExhausted':'butter'} quotaNotice`}><div><strong>{quotaBlocked?'Token quota blocked':`${fmtTokens(Number(quota.used||usageInfo?.usage?.totalTokens||0))} / ${fmtTokens(Number(quota.limit||0))} tokens used`}</strong><span>{quotaBlocked?`Natural reset${quota.resetAt?` in ${resetRemainingLabel} (${new Date(quota.resetAt).toLocaleTimeString()})`:''}`:`${fmtTokens(Number(quota.remaining||0))} remaining · resets ${quota.resetAt?new Date(quota.resetAt).toLocaleTimeString():'—'}`}</span>{quotaLimitSummary?<small>{quotaLimitSummary}</small>:null}{resetsAvailable>0?<small>{resetsAvailable} reset{resetsAvailable===1?'':'s'} available{resetCredits?.nextExpiry?` · expires ${new Date(resetCredits.nextExpiry).toLocaleString()}`:''}</small>:null}</div>{quotaBlocked&&resetsAvailable>0?<button type="button" className="btn compact primary" disabled={resetBusy} onClick={()=>void redeemQuotaReset()}>{resetBusy?'Resetting…':'Use 1 reset & retry'}</button>:null}</div>:null}
         <form className="composerBox" onSubmit={submit}>
           {attachments.length||uploading?<div className="attachmentTray">{attachments.map(a=><div className="attachmentChip" key={a.id}><span className="attachmentIcon">{a.mediaType.startsWith('image/')?<ImageIcon size={16}/>:a.source==='folder'?<FolderOpen size={16}/>:<File size={16}/>}</span><div><strong>{a.name}</strong><small>{a.source==='folder'?a.relativePath:size(a.sizeBytes)} · {a.extractStatus}</small></div><button type="button" aria-label={`Remove ${a.name}`} onClick={()=>void removeAttachment(a)}><X size={14}/></button></div>)}{uploading?<div className="attachmentChip uploading"><span className="attachmentIcon"><Paperclip size={16}/></span><div><strong>Uploading…</strong><small>{uploading} file{uploading>1?'s':''}</small></div></div>:null}</div>:null}
           {uploadError?<div className="attachmentError">{uploadError}</div>:null}
