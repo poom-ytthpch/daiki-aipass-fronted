@@ -181,7 +181,39 @@ export default function Chat(){
     setThinkingMode(next);
     try{const p=JSON.parse(localStorage.getItem('daiki_preferences')||'{}');localStorage.setItem('daiki_preferences',JSON.stringify({...p,thinkingMode:next}))}catch{}
   };
-  const copyMessage=async(value:string,key:string)=>{try{await navigator.clipboard.writeText(value);setCopiedKey(key);window.setTimeout(()=>setCopiedKey(''),1400)}catch{}};
+  const copyMessage=async(value:string,key:string)=>{
+    let copied=false;
+    if(navigator.clipboard?.writeText){
+      try{
+        await navigator.clipboard.writeText(value);
+        copied=true;
+      }catch{}
+    }
+    if(!copied){
+      try{
+        const area=document.createElement('textarea');
+        area.value=value;
+        area.setAttribute('readonly','');
+        area.style.position='fixed';
+        area.style.top='-1000px';
+        area.style.left='-1000px';
+        area.style.opacity='0';
+        document.body.appendChild(area);
+        area.focus();
+        area.select();
+        area.setSelectionRange(0,area.value.length);
+        copied=document.execCommand('copy');
+        area.remove();
+      }catch{}
+    }
+    if(copied){
+      setUploadError('');
+      setCopiedKey(key);
+      window.setTimeout(()=>setCopiedKey(''),1400);
+    }else{
+      setUploadError('Could not copy this message.');
+    }
+  };
   const refreshUsage=async()=>{try{const r=await fetch('/api/usage',{cache:'no-store'});if(r.ok){const next=await r.json() as UsageResponse;const grants=next.quota?.resetCredits?.grants||[];const latest=[...grants].sort((a,b)=>Number(b.id)-Number(a.id))[0];if(latest){const key='daiki_seen_reset_grant';const seen=Number(localStorage.getItem(key)||0);if(latest.id>seen){setResetGiftNotice(`You received ${latest.totalResets||latest.remainingResets} quota reset${(latest.totalResets||latest.remainingResets)===1?'':'s'} · expires ${new Date(latest.expiresAt).toLocaleString()}`);localStorage.setItem(key,String(latest.id))}}setUsageInfo(next)}}catch{}};
   const redeemQuotaReset=async()=>{if(resetBusy||resetsAvailable<=0)return;setResetBusy(true);setUploadError('');try{const r=await fetch('/api/quota-resets/use',{method:'POST'});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||'Could not use reset');await refreshUsage();if(currentRun?.error==='quota_exhausted')await controlRun('resume')}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setResetBusy(false)}};
   const refreshSessions=async()=>{const r=await fetch('/api/chat-sessions',{cache:'no-store'});if(r.ok){const d=await r.json() as {sessions:ChatSession[]};setSessions(d.sessions||[])}};
