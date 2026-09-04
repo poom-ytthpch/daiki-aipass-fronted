@@ -117,3 +117,46 @@
 .assistantSourceList a{min-width:0;display:grid;grid-template-columns:24px minmax(0,1fr);gap:8px;align-items:center;padding:9px 10px;border:1px solid #e9e4df;border-radius:11px;background:#fbfaf9;color:inherit;text-decoration:none;transition:border-color .12s ease,background .12s ease}
 .assistantSourceList a:hover{border-color:#d7d0c9;background:#f7f4f1}.assistantSourceList a>b{width:22px;height:22px;display:grid;place-items:center;border-radius:50%;background:#eee9e4;color:#746b63;font-size:10px}.assistantSourceList a>span{min-width:0;display:grid;gap:2px}.assistantSourceList a strong{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.assistantSourceList a small{font-size:9px;color:#958c84;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:900px){.messageFeed{width:min(760px,calc(100% - 24px))}.messageRow.ai .messageStack{max-width:calc(100% - 34px)}.assistantSourceList{grid-template-columns:1fr}.messageRow.ai .bubble{font-size:14px;line-height:1.68}}
+
+/* Mobile chat: prioritize the answer, reduce chrome, and keep long technical content readable. */
+@media(max-width:620px){
+  .chatTopbar{height:auto;min-height:88px;flex-basis:auto;padding:7px 10px;display:grid;grid-template-columns:minmax(0,1fr);gap:5px;align-content:center}
+  .chatTopbarTitle{width:100%;gap:7px}.chatTopbarTitle strong{max-width:calc(100vw - 86px);font-size:12px}.chatTopbarTitle small{display:none}
+  .chatTopbarControls{width:100%;min-width:0;gap:5px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;padding-bottom:1px}.chatTopbarControls::-webkit-scrollbar{display:none}
+  .chatTopbarControls select{flex:1 1 92px;min-width:82px;max-width:none;height:34px;min-height:34px;padding-left:8px;padding-right:22px;font-size:10px}
+  .thinkingControl,.quotaControl{flex:0 0 34px}.thinkingControl>summary,.quotaControl>summary{width:34px;height:34px;min-height:34px}
+
+  .chatScroll{scroll-padding-bottom:118px}
+  .messageFeed{width:100%;padding:12px 14px 124px}
+  .messageRow{padding:10px 0;gap:0}
+  .messageRow.ai{display:block;padding:14px 0 18px}
+  .messageRow.ai .messageAvatar{display:none}
+  .messageRow.ai .messageStack{width:100%;max-width:100%;gap:6px}
+  .messageRow.ai .bubble{width:100%;font-size:15px;line-height:1.72;padding:0;color:#211d1a;text-rendering:optimizeLegibility}
+  .messageRow.ai .markdownBody{width:100%;max-width:100%;word-break:normal;overflow-wrap:anywhere;text-wrap:pretty}
+  .messageRow.ai .markdownBody p{margin:0 0 12px}
+  .messageRow.ai .markdownBody h1,.messageRow.ai .markdownBody h2,.messageRow.ai .markdownBody h3{margin:20px 0 8px;line-height:1.32;letter-spacing:-.01em}
+  .messageRow.ai .markdownBody h1{font-size:20px}.messageRow.ai .markdownBody h2{font-size:18px}.messageRow.ai .markdownBody h3{font-size:16px}
+  .messageRow.ai .markdownBody ul,.messageRow.ai .markdownBody ol{margin:7px 0 13px;padding-left:20px}.messageRow.ai .markdownBody li{margin:4px 0;padding-left:1px}
+  .messageRow.ai .markdownBody blockquote{margin:13px 0;padding-left:12px}
+  .messageRow.ai .markdownBody pre{width:100%;max-width:100%;margin:13px 0;padding:12px;border-radius:10px;font-size:12px;line-height:1.55;-webkit-overflow-scrolling:touch}
+  .messageRow.ai .markdownBody table{width:calc(100% + 28px);max-width:none;margin:14px -14px;padding:0 14px;font-size:12px;-webkit-overflow-scrolling:touch}
+  .messageRow.ai .markdownBody th,.messageRow.ai .markdownBody td{min-width:110px;padding:8px 9px}
+
+  .messageRow.user{padding:8px 0 12px 42px}.messageRow.user .messageStack{max-width:100%}.messageRow.user .bubble{max-width:100%;padding:9px 12px;border-radius:16px;font-size:14px;line-height:1.55}
+  .messageActions{gap:2px;min-height:28px}.messageActions button{min-height:28px;padding:3px 6px;font-size:10px}
+  .researchBadge,.tokenUsageBadge{display:none}.thinkingBadge{font-size:9px;line-height:1.35;padding:4px 7px}
+  .runActivity{margin-top:2px;border-radius:10px}.runActivity>summary{padding:7px 8px;gap:5px}.runActivity>summary small{font-size:9px}
+  .assistantSources{margin-top:12px;padding-top:11px}.assistantSourceList{gap:6px}.assistantSourceList a{padding:9px;border-radius:10px}.assistantSourceList a strong{font-size:11px;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.assistantSourceList a small{font-size:9px}
+
+  .composerDock{padding:10px 8px calc(7px + env(safe-area-inset-bottom));background:linear-gradient(to bottom,rgba(255,255,255,0),#fff 18%,#fff)}
+  .composerBox{border-radius:18px;padding:6px 7px;box-shadow:0 6px 24px rgba(40,32,25,.08)}
+  .composerBox .chatInput{min-height:44px;max-height:144px;padding:10px 7px;font-size:16px;line-height:1.42}
+  .composerBox .attachBtn,.composerBox .sendBtn{width:38px;height:38px;min-width:38px;min-height:38px;flex-basis:38px}
+  .composerHint{display:none}
+  .quotaNotice,.resetGiftNotice{width:100%;margin-bottom:6px;padding:8px 10px;border-radius:11px}.quotaNotice strong,.resetGiftNotice strong{font-size:11px}.quotaNotice span,.resetGiftNotice span{font-size:10px}
+}
+
+@media(max-width:390px){
+  .messageFeed{padding-left:12px;padding-right:12px}.messageRow.user{padding-left:28px}.chatTopbarControls select{min-width:76px;font-size:9px}.messageRow.ai .bubble{font-size:14.5px}.messageRow.ai .markdownBody h1{font-size:19px}.messageRow.ai .markdownBody h2{font-size:17px}
+}
