@@ -50,10 +50,33 @@ const errorText=(value:unknown):string=>{
   return value==null?'':String(value);
 };
 
-function MessageContent({message}:{message:Msg}){
+function sourceHost(value?:string){
+  if(!value)return '';
+  try{return new URL(value).hostname.replace(/^www\./,'')}catch{return ''}
+}
+
+function linkResearchCitations(text:string,sources:RunSource[]){
+  if(!sources.length)return text;
+  const byIndex=new Map(sources.map((source,i)=>[source.index||i+1,source]));
+  return text.replace(/\[(\d+)\](?!\()/g,(raw,indexText)=>{
+    const source=byIndex.get(Number(indexText));
+    return source?.url?`[${indexText}](${source.url})`:raw;
+  });
+}
+
+function ResearchSources({sources}:{sources:RunSource[]}){
+  if(!sources.length)return null;
+  return <div className="assistantSources" aria-label="Sources">
+    <div className="assistantSourcesHead"><Globe2 size={13}/><strong>Sources</strong><span>{sources.length}</span></div>
+    <div className="assistantSourceList">{sources.slice(0,6).map((source,i)=><a key={`${source.url||source.title||i}`} href={source.url||'#'} target="_blank" rel="noreferrer"><b>{source.index||i+1}</b><span><strong>{source.title||sourceHost(source.url)||`Source ${i+1}`}</strong><small>{sourceHost(source.url)||source.engine||'Web source'}</small></span></a>)}</div>
+  </div>;
+}
+
+function MessageContent({message,sources=[]}:{message:Msg;sources?:RunSource[]}){
   if(message.role==='user')return <div className="userText">{message.text}</div>;
   if(!message.text)return <div className="typingDots" aria-label="Daiki is thinking"><i/><i/><i/></div>;
-  return <div className="markdownBody"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown></div>;
+  const content=linkResearchCitations(message.text,sources);
+  return <div className="markdownBody"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{a:({href,children,...props})=><a {...props} href={href} target={href?.startsWith('http')?'_blank':undefined} rel={href?.startsWith('http')?'noreferrer':undefined}>{children}</a>}}>{content}</ReactMarkdown></div>;
 }
 
 function RunActivityDetails({run}:{run:ChatRun}){
@@ -295,8 +318,9 @@ export default function Chat(){
 
       <div className="chatScroll" ref={scrollRef} onDragOver={e=>{if(!pending)e.preventDefault()}} onDrop={e=>{if(pending)return;e.preventDefault();void uploadFiles(e.dataTransfer.files,'file')}}>
         {!msgs.length&&!currentRun?<div className="chatEmptyState"><div className="emptyMark">D</div><h1>What can I help with?</h1><p>Ask anything, research the web, or drop in files and project folders.</p><div className="promptStarters">{starters.map(([label,prompt])=><button key={label} type="button" onClick={()=>setText(prompt)}><span>{label}</span><small>{prompt}</small></button>)}</div></div>:<div className="messageFeed">
-          {msgs.map((m,i)=>{const copyKey=`${m.role}-${m.id??i}`;const tokens=m.run?.activity?.tokens;const research=m.run?.activity?.research;return <div key={copyKey} className={`messageRow ${m.role}`}><div className="messageAvatar">{m.role==='ai'?'D':'You'}</div><div className="messageStack"><div className="bubble">{m.role==='user'&&editingMessageId===m.id?<div className="messageEditor"><textarea autoFocus value={editText} onChange={e=>setEditText(e.target.value)} rows={Math.min(8,Math.max(2,editText.split('\n').length))}/><div><button type="button" onClick={()=>{setEditingMessageId(null);setEditText('')}}>Cancel</button><button type="button" className="primary" onClick={()=>void editAndRetry(m,editText)}>Save & Retry</button></div></div>:<MessageContent message={m}/>}</div>
+          {msgs.map((m,i)=>{const copyKey=`${m.role}-${m.id??i}`;const tokens=m.run?.activity?.tokens;const research=m.run?.activity?.research;const sources=research?.sources||[];return <div key={copyKey} className={`messageRow ${m.role}`}><div className="messageAvatar">{m.role==='ai'?'D':'You'}</div><div className="messageStack"><div className="bubble">{m.role==='user'&&editingMessageId===m.id?<div className="messageEditor"><textarea autoFocus value={editText} onChange={e=>setEditText(e.target.value)} rows={Math.min(8,Math.max(2,editText.split('\n').length))}/><div><button type="button" onClick={()=>{setEditingMessageId(null);setEditText('')}}>Cancel</button><button type="button" className="primary" onClick={()=>void editAndRetry(m,editText)}>Save & Retry</button></div></div>:<MessageContent message={m} sources={sources}/>}</div>
             {m.text?<div className="messageActions"><button type="button" aria-label="Copy message" onClick={()=>void copyMessage(m.text,copyKey)}>{copiedKey===copyKey?<Check size={13}/>:<Copy size={13}/>}<span>{copiedKey===copyKey?'Copied':'Copy'}</span></button>{m.role==='user'&&m.id?<button type="button" disabled={busy} onClick={()=>{setEditingMessageId(m.id!);setEditText(m.text)}}><Pencil size={13}/><span>Edit</span></button>:null}{m.role==='ai'?<button type="button" disabled={busy} onClick={()=>void retryFromAssistant(i)}><RotateCcw size={13}/><span>Retry</span></button>:null}</div>:null}
+            {m.role==='ai'&&research?.used?<ResearchSources sources={sources}/>:null}
             {research?.used?<span className="researchBadge"><Globe2 size={12}/>Web searched · {research.sources?.length||research.sourceCount||0} sources</span>:null}
             {tokens?<span className="tokenUsageBadge"><Brain size={12}/>Tokens · {fmtTokens(tokens.input)} in · {fmtTokens(tokens.reasoning)} think · {fmtTokens(tokens.answer)} answer · {fmtTokens(tokens.total)} total</span>:null}
             {m.run?<RunActivityDetails run={m.run}/>:null}
