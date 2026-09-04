@@ -31,7 +31,7 @@ const thinkingLevels=[
   {id:'medium' as const,label:'Medium',reasoning:768,completion:2560},
   {id:'high' as const,label:'High',reasoning:1536,completion:4096},
 ];
-const fmtTokens=(n:number)=>n>=1000?`${(n/1000).toFixed(n>=10000?0:1)}K`:String(Math.max(0,Math.round(n)));
+const fmtTokens=(n:number)=>n>=1_000_000?`${Number((n/1_000_000).toFixed(n>=10_000_000?0:2))}M`:n>=1000?`${Number((n/1000).toFixed(n>=100_000?0:1))}K`:String(Math.max(0,Math.round(n)));
 const starters=[
   ['Explain','Explain this simply: '],
   ['Plan','Make a practical plan for '],
@@ -123,6 +123,7 @@ export default function Chat(){
   const [quotaClock,setQuotaClock]=useState(Date.now());
   const [resetBusy,setResetBusy]=useState(false);
   const [resetGiftNotice,setResetGiftNotice]=useState('');
+  const [quotaIndicatorHidden,setQuotaIndicatorHidden]=useState(false);
   const fileRef=useRef<HTMLInputElement>(null);
   const imageRef=useRef<HTMLInputElement>(null);
   const folderRef=useRef<HTMLInputElement>(null);
@@ -301,6 +302,15 @@ export default function Chat(){
       <header className="chatTopbar">
         <div className="chatTopbarTitle"><button className="iconButton historyToggle" type="button" aria-label="Open chat history" onClick={()=>setHistoryOpen(true)}><Menu size={19}/></button><div><strong>{currentSession?.title||'New chat'}</strong><small>{busy?'Daiki is thinking…':'Daiki AI Passport'}</small></div></div>
         <div className="chatTopbarControls">
+          {quota?.mode==='limited'&&!quotaIndicatorHidden?<details className={`quotaControl ${quotaBlocked?'blocked':''}`}>
+            <summary><span className="quotaStatusDot"/><span>{quotaBlocked?'Quota blocked':`Quota · ${fmtTokens(Number(quota.remaining||0))} left`}</span></summary>
+            <div className="quotaPopover">
+              <div className="quotaPopoverHead"><div><strong>Token quota</strong><small>{quotaBlocked?'Usage is currently blocked':'Usage updates automatically'}</small></div><button type="button" aria-label="Hide quota indicator" onClick={()=>setQuotaIndicatorHidden(true)}><X size={14}/></button></div>
+              <div className="quotaPopoverTotal"><strong>{fmtTokens(Number(quota.used||usageInfo?.usage?.totalTokens||0))} / {fmtTokens(Number(quota.limit||0))}</strong><span>{fmtTokens(Number(quota.remaining||0))} remaining{quota.resetAt?` · resets ${new Date(quota.resetAt).toLocaleTimeString()}`:''}</span></div>
+              {(quota.limits||[]).length?<div className="quotaPopoverWindows">{(quota.limits||[]).map(l=><div key={l.id}><span>{l.interval}{l.interval==='hour'&&Number(l.intervalCount||1)>1?` · every ${l.intervalCount}h`:''}</span><strong>{fmtTokens(l.used)} / {fmtTokens(l.limit)}</strong></div>)}</div>:null}
+              {resetsAvailable>0?<small className="quotaPopoverReset">{resetsAvailable} reset{resetsAvailable===1?'':'s'} available{resetCredits?.nextExpiry?` · earliest expiry ${new Date(resetCredits.nextExpiry).toLocaleString()}`:''}</small>:null}
+            </div>
+          </details>:null}
           <details className="thinkingControl">
             <summary aria-disabled={pending}><Brain size={13}/><span>Think: {thinking.label}</span></summary>
             <div className="thinkingPopover">
@@ -333,8 +343,7 @@ export default function Chat(){
 
       <div className="composerDock">
         {resetGiftNotice?<div className="notice resetGiftNotice"><div><strong>Quota reset received</strong><span>{resetGiftNotice}</span></div><button type="button" className="btn compact ghost" onClick={()=>setResetGiftNotice('')}>Got it</button></div>:null}
-        {!quotaBlocked&&resetsAvailable>0?<div className="notice resetGiftNotice persistent"><div><strong>{resetsAvailable} quota reset{resetsAvailable===1?'':'s'} available</strong><span>Use one when your token quota is blocked{resetCredits?.nextExpiry?` · earliest expiry ${new Date(resetCredits.nextExpiry).toLocaleString()}`:''}</span></div></div>:null}
-        {quota?.mode==='limited'?<div className={`notice ${quotaBlocked?'quotaNoticeExhausted':'butter'} quotaNotice`}><div><strong>{quotaBlocked?'Token quota blocked':`${fmtTokens(Number(quota.used||usageInfo?.usage?.totalTokens||0))} / ${fmtTokens(Number(quota.limit||0))} tokens used`}</strong><span>{quotaBlocked?`Natural reset${quota.resetAt?` in ${resetRemainingLabel} (${new Date(quota.resetAt).toLocaleTimeString()})`:''}`:`${fmtTokens(Number(quota.remaining||0))} remaining · resets ${quota.resetAt?new Date(quota.resetAt).toLocaleTimeString():'—'}`}</span>{quotaLimitSummary?<small>{quotaLimitSummary}</small>:null}{resetsAvailable>0?<small>{resetsAvailable} reset{resetsAvailable===1?'':'s'} available{resetCredits?.nextExpiry?` · expires ${new Date(resetCredits.nextExpiry).toLocaleString()}`:''}</small>:null}</div>{quotaBlocked&&resetsAvailable>0?<button type="button" className="btn compact primary" disabled={resetBusy} onClick={()=>void redeemQuotaReset()}>{resetBusy?'Resetting…':'Use 1 reset & retry'}</button>:null}</div>:null}
+        {quota?.mode==='limited'&&quotaBlocked?<div className="notice quotaNoticeExhausted quotaNotice"><div><strong>Token quota blocked</strong><span>{`Natural reset${quota.resetAt?` in ${resetRemainingLabel} (${new Date(quota.resetAt).toLocaleTimeString()})`:''}`}</span>{quotaLimitSummary?<small>{quotaLimitSummary}</small>:null}{resetsAvailable>0?<small>{resetsAvailable} reset{resetsAvailable===1?'':'s'} available{resetCredits?.nextExpiry?` · expires ${new Date(resetCredits.nextExpiry).toLocaleString()}`:''}</small>:null}</div>{resetsAvailable>0?<button type="button" className="btn compact primary" disabled={resetBusy} onClick={()=>void redeemQuotaReset()}>{resetBusy?'Resetting…':'Use 1 reset & retry'}</button>:null}</div>:null}
         <form className="composerBox" onSubmit={submit}>
           {attachments.length||uploading?<div className="attachmentTray">{attachments.map(a=><div className="attachmentChip" key={a.id}><span className="attachmentIcon">{a.mediaType.startsWith('image/')?<ImageIcon size={16}/>:a.source==='folder'?<FolderOpen size={16}/>:<File size={16}/>}</span><div><strong>{a.name}</strong><small>{a.source==='folder'?a.relativePath:size(a.sizeBytes)} · {a.extractStatus}</small></div><button type="button" aria-label={`Remove ${a.name}`} onClick={()=>void removeAttachment(a)}><X size={14}/></button></div>)}{uploading?<div className="attachmentChip uploading"><span className="attachmentIcon"><Paperclip size={16}/></span><div><strong>Uploading…</strong><small>{uploading} file{uploading>1?'s':''}</small></div></div>:null}</div>:null}
           {uploadError?<div className="attachmentError">{uploadError}</div>:null}
