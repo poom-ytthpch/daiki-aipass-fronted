@@ -8,7 +8,7 @@ import remarkGfm from 'remark-gfm';
 type Attachment={id:string;name:string;relativePath:string;source:'file'|'image'|'folder';mediaType:string;sizeBytes:number;extractStatus:string;createdAt:string};
 type TokenUsage={input:number;reasoning:number;answer:number;total:number};
 type RunSource={index?:number;title?:string;url?:string;engine?:string;snippet?:string};
-type ResetGrant={id:number;remainingResets:number;expiresAt:string;note?:string};
+type ResetGrant={id:number;remainingResets:number;totalResets?:number;expiresAt:string;createdAt?:string;note?:string};
 type ResetCredits={available:number;nextExpiry?:string;lastResetAt?:string;grants?:ResetGrant[]};
 type QuotaState={mode?:string;limit?:number;used?:number;remaining?:number;resetAt?:string;interval?:string;windowStart?:string;resetCredits?:ResetCredits};
 type UsageResponse={usage?:{inputTokens?:number;outputTokens?:number;totalTokens?:number};quota?:QuotaState};
@@ -98,6 +98,7 @@ export default function Chat(){
   const [usageInfo,setUsageInfo]=useState<UsageResponse|null>(null);
   const [quotaClock,setQuotaClock]=useState(Date.now());
   const [resetBusy,setResetBusy]=useState(false);
+  const [resetGiftNotice,setResetGiftNotice]=useState('');
   const fileRef=useRef<HTMLInputElement>(null);
   const imageRef=useRef<HTMLInputElement>(null);
   const folderRef=useRef<HTMLInputElement>(null);
@@ -153,6 +154,7 @@ export default function Chat(){
   useEffect(()=>{const el=textareaRef.current;if(!el)return;el.style.height='auto';el.style.height=`${Math.min(el.scrollHeight,180)}px`},[text]);
   useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setHistoryOpen(false);setAttachMenu(false);setEditingMessageId(null)}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[]);
   useEffect(()=>{if(!quota?.resetAt)return;const timer=window.setInterval(()=>setQuotaClock(Date.now()),1000);return()=>window.clearInterval(timer)},[quota?.resetAt]);
+  useEffect(()=>{const timer=window.setInterval(()=>void refreshUsage(),20000);const wake=()=>{if(document.visibilityState==='visible')void refreshUsage()};window.addEventListener('focus',wake);document.addEventListener('visibilitychange',wake);return()=>{window.clearInterval(timer);window.removeEventListener('focus',wake);document.removeEventListener('visibilitychange',wake)}},[]);
   useEffect(()=>{
     const runId=currentRun?.id;if(!runId||!sessionId||!['queued','running'].includes(currentRun.status))return;
     let closed=false;
@@ -176,7 +178,7 @@ export default function Chat(){
     try{const p=JSON.parse(localStorage.getItem('daiki_preferences')||'{}');localStorage.setItem('daiki_preferences',JSON.stringify({...p,thinkingMode:next}))}catch{}
   };
   const copyMessage=async(value:string,key:string)=>{try{await navigator.clipboard.writeText(value);setCopiedKey(key);window.setTimeout(()=>setCopiedKey(''),1400)}catch{}};
-  const refreshUsage=async()=>{try{const r=await fetch('/api/usage',{cache:'no-store'});if(r.ok)setUsageInfo(await r.json() as UsageResponse)}catch{}};
+  const refreshUsage=async()=>{try{const r=await fetch('/api/usage',{cache:'no-store'});if(r.ok){const next=await r.json() as UsageResponse;const grants=next.quota?.resetCredits?.grants||[];const latest=[...grants].sort((a,b)=>Number(b.id)-Number(a.id))[0];if(latest){const key='daiki_seen_reset_grant';const seen=Number(localStorage.getItem(key)||0);if(latest.id>seen){setResetGiftNotice(`You received ${latest.totalResets||latest.remainingResets} quota reset${(latest.totalResets||latest.remainingResets)===1?'':'s'} · expires ${new Date(latest.expiresAt).toLocaleString()}`);localStorage.setItem(key,String(latest.id))}}setUsageInfo(next)}}catch{}};
   const redeemQuotaReset=async()=>{if(resetBusy||resetsAvailable<=0)return;setResetBusy(true);setUploadError('');try{const r=await fetch('/api/quota-resets/use',{method:'POST'});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||'Could not use reset');await refreshUsage();if(currentRun?.error==='quota_exhausted')await controlRun('resume')}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setResetBusy(false)}};
   const refreshSessions=async()=>{const r=await fetch('/api/chat-sessions',{cache:'no-store'});if(r.ok){const d=await r.json() as {sessions:ChatSession[]};setSessions(d.sessions||[])}};
   const mapMessages=(messages:StoredMessage[],runs:ChatRun[])=>{const byRun=new Map(runs.map(run=>[run.id,run]));return messages.map(m=>({id:m.id,role:m.role==='assistant'?'ai' as const:'user' as const,text:m.content,runId:m.runId,run:m.runId?byRun.get(m.runId):undefined}))};
@@ -269,6 +271,8 @@ export default function Chat(){
       </div>
 
       <div className="composerDock">
+        {resetGiftNotice?<div className="notice resetGiftNotice"><div><strong>Quota reset received</strong><span>{resetGiftNotice}</span></div><button type="button" className="btn compact ghost" onClick={()=>setResetGiftNotice('')}>Got it</button></div>:null}
+        {!quotaBlocked&&resetsAvailable>0?<div className="notice resetGiftNotice persistent"><div><strong>{resetsAvailable} quota reset{resetsAvailable===1?'':'s'} available</strong><span>Use one when your token quota is blocked{resetCredits?.nextExpiry?` · earliest expiry ${new Date(resetCredits.nextExpiry).toLocaleString()}`:''}</span></div></div>:null}
         {quota?.mode==='limited'?<div className={`notice ${quotaBlocked?'quotaNoticeExhausted':'butter'} quotaNotice`}><div><strong>{quotaBlocked?'Token quota blocked':`${fmtTokens(Number(quota.used||usageInfo?.usage?.totalTokens||0))} / ${fmtTokens(Number(quota.limit||0))} tokens used`}</strong><span>{quotaBlocked?`Natural reset${quota.resetAt?` in ${resetRemainingLabel} (${new Date(quota.resetAt).toLocaleTimeString()})`:''}`:`${fmtTokens(Number(quota.remaining||0))} remaining · resets ${quota.resetAt?new Date(quota.resetAt).toLocaleTimeString():'—'}`}</span>{resetsAvailable>0?<small>{resetsAvailable} reset{resetsAvailable===1?'':'s'} available{resetCredits?.nextExpiry?` · expires ${new Date(resetCredits.nextExpiry).toLocaleString()}`:''}</small>:null}</div>{quotaBlocked&&resetsAvailable>0?<button type="button" className="btn compact primary" disabled={resetBusy} onClick={()=>void redeemQuotaReset()}>{resetBusy?'Resetting…':'Use 1 reset & retry'}</button>:null}</div>:null}
         <form className="composerBox" onSubmit={submit}>
           {attachments.length||uploading?<div className="attachmentTray">{attachments.map(a=><div className="attachmentChip" key={a.id}><span className="attachmentIcon">{a.mediaType.startsWith('image/')?<ImageIcon size={16}/>:a.source==='folder'?<FolderOpen size={16}/>:<File size={16}/>}</span><div><strong>{a.name}</strong><small>{a.source==='folder'?a.relativePath:size(a.sizeBytes)} · {a.extractStatus}</small></div><button type="button" aria-label={`Remove ${a.name}`} onClick={()=>void removeAttachment(a)}><X size={14}/></button></div>)}{uploading?<div className="attachmentChip uploading"><span className="attachmentIcon"><Paperclip size={16}/></span><div><strong>Uploading…</strong><small>{uploading} file{uploading>1?'s':''}</small></div></div>:null}</div>:null}
