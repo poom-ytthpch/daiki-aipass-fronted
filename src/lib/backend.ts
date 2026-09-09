@@ -19,16 +19,36 @@ export async function backendFetch(path:string,init:RequestInit={}){
   return response;
 }
 
+const responseHeaders=['content-type','cache-control','retry-after','x-accel-buffering','x-daiki-request-id','x-daiki-access-mode','x-daiki-inference-upstream','x-daiki-quota-mode','x-daiki-quota-remaining','x-daiki-quota-reset','x-daiki-research-used','x-daiki-research-sources','x-daiki-research-mode','x-daiki-model-alias','x-daiki-skills','x-daiki-tools','x-daiki-thinking-mode','x-daiki-token-estimate-input','x-daiki-token-estimate-thinking','x-daiki-token-estimate-output','x-daiki-token-estimate-total'];
+const copyResponseHeaders=(upstream:Response)=>{const headers=new Headers();for(const name of responseHeaders){const value=upstream.headers.get(name);if(value)headers.set(name,value)}return headers};
 export async function proxyBackend(path:string,req?:Request){
   try{
     const init:RequestInit={method:req?.method||'GET'};
     if(req&& !['GET','HEAD'].includes(req.method)) init.body=await req.text();
     const upstream=await backendFetch(path,init);
-    const headers=new Headers();
-    for(const name of ['content-type','cache-control','x-accel-buffering','x-daiki-request-id','x-daiki-research-used','x-daiki-research-sources','x-daiki-research-mode','x-daiki-model-alias','x-daiki-skills','x-daiki-tools','x-daiki-thinking-mode','x-daiki-token-estimate-input','x-daiki-token-estimate-thinking','x-daiki-token-estimate-output','x-daiki-token-estimate-total']){const value=upstream.headers.get(name);if(value)headers.set(name,value)}
-    return new Response(upstream.body,{status:upstream.status,headers});
+    return new Response(upstream.body,{status:upstream.status,headers:copyResponseHeaders(upstream)});
   }catch(e){
     const message=e instanceof Error?e.message:String(e);
     return Response.json({error:message},{status:message==='Unauthorized'?401:502});
+  }
+}
+export async function proxyPublicBackend(path:string,req?:Request){
+  try{
+    if(!base())throw new Error('DAIKI_BACKEND_URL is not configured');
+    const headers=new Headers();
+    if(req){
+      const contentType=req.headers.get('content-type');if(contentType)headers.set('content-type',contentType);
+      // Resolve the public network identity at the server boundary. Do not forward a
+      // client-controlled X-Forwarded-For chain as-is to the backend quota layer.
+      const networkIP=req.headers.get('cf-connecting-ip')||req.headers.get('x-real-ip')||req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()||'';
+      if(networkIP)headers.set('x-daiki-client-ip',networkIP);
+    }
+    const init:RequestInit={method:req?.method||'GET',headers,cache:'no-store'};
+    if(req&&!['GET','HEAD'].includes(req.method))init.body=await req.text();
+    const upstream=await fetch(`${base()}${path}`,init);
+    return new Response(upstream.body,{status:upstream.status,headers:copyResponseHeaders(upstream)});
+  }catch(e){
+    const message=e instanceof Error?e.message:String(e);
+    return Response.json({error:message},{status:502});
   }
 }

@@ -4,6 +4,9 @@ export function proxy(req:NextRequest){
   if(p.startsWith('/login'))return hasSession?NextResponse.redirect(new URL('/',req.url)):NextResponse.next();
   if(p.startsWith('/forgot-password')||p.startsWith('/reset-password')||p==='/api/auth/password-reset')return NextResponse.next();
   if(p.startsWith('/api/auth')||p.startsWith('/_next')||p==='/favicon.ico')return NextResponse.next();
+  // Chat is the public landing surface. The server-side /api/chat route decides
+  // whether to use the authenticated quota path or the restricted Guest path.
+  if(p==='/'||p==='/chat'||p==='/api/chat'||p==='/api/account'||p.startsWith('/api/guest/'))return NextResponse.next();
   if(!hasSession)return NextResponse.redirect(new URL('/login',req.url));
   return NextResponse.next();
 }

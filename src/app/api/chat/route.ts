@@ -1,6 +1,9 @@
-import {proxyBackend} from '@/lib/backend';
+import {getSession} from '@/lib/auth';
+import {proxyBackend,proxyPublicBackend} from '@/lib/backend';
 export const runtime='nodejs';
 export async function POST(req:Request){
   const body=await req.clone().json().catch(()=>({})) as {stream?:boolean};
-  return proxyBackend(body.stream===false?'/v1/chat':'/v1/chat/stream',req);
+  const session=await getSession();
+  const path=body.stream===false?'/chat':'/chat/stream';
+  return session?proxyBackend(`/v1${path}`,req):proxyPublicBackend(`/v1/guest${path}`,req);
 }
