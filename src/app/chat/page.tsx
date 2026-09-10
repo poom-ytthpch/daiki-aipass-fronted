@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import {FormEvent,useEffect,useMemo,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {Brain,Check,Copy,File,FolderOpen,Globe2,Image as ImageIcon,MoreHorizontal,Paperclip,Pause,Pencil,Play,Plus,RotateCcw,Search,Send,Trash2,X} from 'lucide-react';
+import {Brain,Check,Copy,File,FolderOpen,Globe2,Image as ImageIcon,MoreHorizontal,Paperclip,Pause,Pencil,Pin,PinOff,Play,Plus,RotateCcw,Search,Send,Trash2,X} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -18,7 +18,7 @@ type UsageResponse={usage?:{inputTokens?:number;outputTokens?:number;totalTokens
 type RunActivity={phase?:string;durationMs?:number;requestId?:string;httpStatus?:number;retryAfterSeconds?:number;quota?:QuotaState;research?:{mode?:string;query?:string;used?:boolean;error?:string;sourceCount?:number;sources?:RunSource[]};thinking?:{mode?:string;reasoningBudget?:number;requestedEffort?:string;effectiveEffort?:string;nativeReasoning?:boolean;model?:string;estimate?:unknown};tokens?:TokenUsage};
 type ChatRun={id:string;sessionId:string;status:'queued'|'running'|'paused'|'completed'|'failed'|'cancelled';researchMode:string;thinkingMode:string;requestId?:string;content:string;error?:string;activity?:RunActivity;createdAt:string;startedAt?:string;completedAt?:string;updatedAt:string};
 type Msg={id?:number;role:'user'|'ai';text:string;attachments?:Attachment[];runId?:string;run?:ChatRun};
-type ChatSession={id:string;title:string;modelAlias:string;createdAt:string;updatedAt:string};
+type ChatSession={id:string;title:string;modelAlias:string;pinnedAt?:string;createdAt:string;updatedAt:string};
 type StoredMessage={id:number;role:'user'|'assistant';content:string;attachmentIds:string[];runId?:string;createdAt:string};
 type PendingPolicy={model:string;tokenLimitPerDay:number;requestsPerHour:number;minIntervalSeconds:number;maxCompletionTokens:number;textOnly:boolean};
 type Account={status?:'pending'|'approved'|'suspended'|'rejected';pendingChatPolicy?:PendingPolicy};
@@ -47,15 +47,12 @@ const thinkingLevels=[
 ];
 type HistoryGroup={label:string;sessions:ChatSession[]};
 function groupChatSessions(rows:ChatSession[]):HistoryGroup[]{
-  const now=new Date();const today=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
-  const buckets=new Map<string,ChatSession[]>();
-  for(const session of rows){
-    const d=new Date(session.updatedAt);const day=new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime();
-    const age=Math.max(0,Math.floor((today-day)/86_400_000));
-    const label=age===0?'Today':age===1?'Yesterday':age<=7?'Previous 7 days':age<=30?'Previous 30 days':d.toLocaleDateString(undefined,{month:'long',year:'numeric'});
-    const bucket=buckets.get(label)||[];bucket.push(session);buckets.set(label,bucket);
-  }
-  return Array.from(buckets,([label,sessions])=>({label,sessions}));
+  const pinned=rows.filter(x=>Boolean(x.pinnedAt));
+  const recent=rows.filter(x=>!x.pinnedAt);
+  const groups:HistoryGroup[]=[];
+  if(pinned.length)groups.push({label:'Pinned',sessions:pinned});
+  if(recent.length)groups.push({label:'Recents',sessions:recent});
+  return groups;
 }
 const fmtTokens=(n:number)=>n>=1_000_000?`${Number((n/1_000_000).toFixed(n>=10_000_000?0:2))}M`:n>=1000?`${Number((n/1000).toFixed(n>=100_000?0:1))}K`:String(Math.max(0,Math.round(n)));
 const starters=[
@@ -319,18 +316,20 @@ export default function Chat(){
   const refreshUsage=async()=>{try{const r=await fetch('/api/usage',{cache:'no-store'});if(r.ok){const next=await r.json() as UsageResponse;const grants=next.quota?.resetCredits?.grants||[];const latest=[...grants].sort((a,b)=>Number(b.id)-Number(a.id))[0];if(latest){const key='daiki_seen_reset_grant';const seen=Number(localStorage.getItem(key)||0);if(latest.id>seen){setResetGiftNotice(`You received ${latest.totalResets||latest.remainingResets} quota reset${(latest.totalResets||latest.remainingResets)===1?'':'s'} · expires ${new Date(latest.expiresAt).toLocaleString()}`);localStorage.setItem(key,String(latest.id))}}setUsageInfo(next)}}catch{}};
   const redeemQuotaReset=async()=>{if(resetBusy||resetsAvailable<=0)return;setResetBusy(true);setUploadError('');try{const r=await fetch('/api/quota-resets/use',{method:'POST'});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||'Could not use reset');await refreshUsage();if(currentRun?.error==='quota_exhausted')await controlRun('resume')}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setResetBusy(false)}};
   const refreshSessions=async()=>{if(guest)return;const r=await fetch('/api/chat-sessions',{cache:'no-store'});if(r.ok){const d=await r.json() as {sessions:ChatSession[]};setSessions(d.sessions||[])}};
-  const mapMessages=(messages:StoredMessage[],runs:ChatRun[])=>{const byRun=new Map(runs.map(run=>[run.id,run]));return messages.map(m=>({id:m.id,role:m.role==='assistant'?'ai' as const:'user' as const,text:m.content,runId:m.runId,run:m.runId?byRun.get(m.runId):undefined}))};
+  const mapMessages=(messages:StoredMessage[],runs:ChatRun[],attachmentRows:Attachment[]=[])=>{const byRun=new Map(runs.map(run=>[run.id,run]));const byAttachment=new Map(attachmentRows.map(a=>[a.id,a]));return messages.map(m=>({id:m.id,role:m.role==='assistant'?'ai' as const:'user' as const,text:m.content,attachments:(m.attachmentIds||[]).map(id=>byAttachment.get(id)).filter((a):a is Attachment=>Boolean(a)),runId:m.runId,run:m.runId?byRun.get(m.runId):undefined}))};
   const loadSessionData=async(id:string,closeHistory=true,preserveComposer=false)=>{
     const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{cache:'no-store'});if(!r.ok)return false;
-    const d=await r.json() as {session:ChatSession;messages:StoredMessage[];runs:ChatRun[]};const runs=d.runs||[];const latest=runs[runs.length-1];
-    setSessionId(d.session.id);setModel(d.session.modelAlias||'auto');setMsgs(mapMessages(d.messages||[],runs));
+    const d=await r.json() as {session:ChatSession;messages:StoredMessage[];runs:ChatRun[];attachments?:Attachment[]};const runs=d.runs||[];const latest=runs[runs.length-1];
+    setSessionId(d.session.id);setModel(d.session.modelAlias||'auto');setMsgs(mapMessages(d.messages||[],runs,d.attachments||[]));
     setCurrentRun(latest&&latest.status!=='completed'?latest:null);localStorage.setItem('daiki_current_session',d.session.id);
     setAttachments([]);if(!preserveComposer)setText('');if(closeHistory)window.dispatchEvent(new Event('daiki-close-navigation'));return true;
   };
   const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setUploadError('');setEditingMessageId(null);setHistoryQuery('');setHistoryResults([]);localStorage.removeItem('daiki_current_session');window.dispatchEvent(new Event('daiki-close-navigation'))};
   const openSession=async(id:string,closeHistory=true)=>{setHistoryBusy(true);try{await loadSessionData(id,closeHistory,false)}finally{setHistoryBusy(false)}};
   const deleteSession=async(id:string)=>{if(id===sessionId&&runBlocking)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'DELETE'});if(r.ok){setHistoryResults(xs=>xs.filter(x=>x.id!==id));if(sessionId===id)newChat();await refreshSessions()}};
-  const renameSession=async(id:string)=>{const title=renameText.trim();if(!title)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({title})});if(r.ok){const updated=await r.json() as ChatSession;setSessions(xs=>xs.map(x=>x.id===id?updated:x));setHistoryResults(xs=>xs.map(x=>x.id===id?updated:x));setRenamingId('');setRenameText('')}};
+  const updateSessionInLists=(updated:ChatSession)=>{setSessions(xs=>xs.map(x=>x.id===updated.id?updated:x));setHistoryResults(xs=>xs.map(x=>x.id===updated.id?updated:x))};
+  const renameSession=async(id:string)=>{const title=renameText.trim();if(!title)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({title})});if(r.ok){const updated=await r.json() as ChatSession;updateSessionInLists(updated);setRenamingId('');setRenameText('')}};
+  const togglePinSession=async(session:ChatSession)=>{const r=await fetch(`/api/chat-sessions/${encodeURIComponent(session.id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({pinned:!session.pinnedAt})});if(r.ok){const updated=await r.json() as ChatSession;updateSessionInLists(updated);await refreshSessions()}};
   const ensureSession=async(title:string)=>{
     if(guest)return '';
     if(sessionId)return sessionId;
@@ -380,7 +379,7 @@ export default function Chat(){
       {historySearching?<div className="historySearching"><span/><span/><span/></div>:null}
       {visibleHistorySessions.length?historyGroups.map(group=><section className="historyGroup" key={group.label}><div className="historyGroupLabel">{group.label}</div>{group.sessions.map(s=><div key={s.id} className={`historyItem ${sessionId===s.id?'active':''}`}>
         {renamingId===s.id?<form className="renameForm" onSubmit={e=>{e.preventDefault();void renameSession(s.id)}}><input autoFocus value={renameText} onChange={e=>setRenameText(e.target.value)} onBlur={()=>{if(renameText.trim())void renameSession(s.id);else setRenamingId('')}}/></form>:<button type="button" disabled={historyBusy} onClick={()=>void openSession(s.id)} title={s.title}><strong>{s.title}</strong></button>}
-        <details className="historyMenu"><summary aria-label={`More options for ${s.title}`}><MoreHorizontal size={16}/></summary><div className="historyMenuPopover"><button type="button" onClick={e=>{const details=e.currentTarget.closest('details');if(details)details.open=false;setRenamingId(s.id);setRenameText(s.title)}}><Pencil size={14}/><span>Rename</span></button><button className="danger" type="button" onClick={e=>{const details=e.currentTarget.closest('details');if(details)details.open=false;void deleteSession(s.id)}}><Trash2 size={14}/><span>Delete</span></button></div></details>
+        <details className="historyMenu"><summary aria-label={`More options for ${s.title}`}><MoreHorizontal size={16}/></summary><div className="historyMenuPopover"><button type="button" onClick={e=>{const details=e.currentTarget.closest('details');if(details)details.open=false;void togglePinSession(s)}}>{s.pinnedAt?<PinOff size={14}/>:<Pin size={14}/>}<span>{s.pinnedAt?'Unpin':'Pin'}</span></button><button type="button" onClick={e=>{const details=e.currentTarget.closest('details');if(details)details.open=false;setRenamingId(s.id);setRenameText(s.title)}}><Pencil size={14}/><span>Rename</span></button><button className="danger" type="button" onClick={e=>{const details=e.currentTarget.closest('details');if(details)details.open=false;void deleteSession(s.id)}}><Trash2 size={14}/><span>Delete</span></button></div></details>
       </div>)}</section>):<div className="historyEmpty">{historyQuery?(historySearching?'Searching…':'No matching chats'):'Your chats will appear here.'}</div>}
     </div>
     {capabilities?<div className="chatHistoryFoot"><span>Smart Assist</span><strong>On</strong><small>{capabilities.skills.length} skills · {capabilities.tools.length} tools</small></div>:null}
