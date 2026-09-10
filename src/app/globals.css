@@ -205,3 +205,62 @@
 @media(min-width:901px) and (max-width:1180px){.appShell.chatShell{grid-template-columns:224px minmax(0,1fr)}.chatShell .appSidebar{padding-left:9px;padding-right:9px}.chatSidebarSlot{min-height:190px}.chatTopbar{padding-left:12px;padding-right:12px}.chatTopbarControls{min-width:0;gap:5px}.chatTopbarControls select{max-width:112px}.messageFeed{width:min(760px,calc(100% - 28px))}}
 @media(min-width:1181px){.appShell.chatShell{grid-template-columns:274px minmax(0,1fr)}}
 @media(max-width:900px){.appShell.chatShell{grid-template-columns:1fr}.chatShell .appSidebar{width:min(88vw,320px)}.chatShell .main,.chatShell .chatPage,.chatShell .chatStage{width:100%;max-width:100%}}
+
+/* Daiki conversational reading layer: compact like a chat, not a document viewer. */
+.messageRow.ai .bubble{white-space:normal;font-size:15px;line-height:1.58;color:#24201d}
+.messageRow.ai .markdownBody{white-space:normal;text-wrap:pretty;word-break:normal;overflow-wrap:anywhere}
+.messageRow.ai .markdownBody p{margin:0 0 .68em;line-height:1.58}
+.messageRow.ai .markdownBody p+p{margin-top:.08em}
+.messageRow.ai .markdownBody h1,.messageRow.ai .markdownBody h2,.messageRow.ai .markdownBody h3{margin:1.05em 0 .42em;line-height:1.24;letter-spacing:-.012em}
+.messageRow.ai .markdownBody h1{font-size:1.36em}.messageRow.ai .markdownBody h2{font-size:1.2em}.messageRow.ai .markdownBody h3{font-size:1.06em}
+.messageRow.ai .markdownBody ul,.messageRow.ai .markdownBody ol{margin:.42em 0 .72em;padding-left:1.45em}
+.messageRow.ai .markdownBody li{margin:.18em 0;padding-left:.08em;line-height:1.56}
+.messageRow.ai .markdownBody li+li{margin-top:.28em}
+.messageRow.ai .markdownBody li>p{margin:0}
+.messageRow.ai .markdownBody blockquote{margin:.8em 0;padding:.08em 0 .08em .85em}
+.messageRow.ai .markdownBody pre,.messageRow.ai .markdownBody table{margin:.8em 0}
+.messageRow.ai .markdownBody code:not(pre code){padding:1px 5px;border-radius:5px}
+.messageRow.ai .markdownBody a.citationLink{display:inline-flex;vertical-align:.12em;align-items:center;justify-content:center;min-width:18px;height:18px;margin:0 2px;padding:0 5px;border:0;border-radius:999px;background:#eef2f4;color:#52616d;text-decoration:none;font-size:10px;font-weight:760;line-height:1;white-space:nowrap}
+.messageRow.ai .markdownBody a.citationLink:hover{background:#e2e8ec;color:#26343e}
+.messageRow.ai{padding:14px 0 18px}.messageRow.ai .messageStack{gap:4px}
+.messageRow.ai .messageActions{margin-top:2px}
+
+/* One quiet response footer instead of a tall stack of diagnostic chips. */
+.responseMetaBar{position:relative;display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:4px;min-width:0;color:#7e766f}
+.responseMetaBar .researchBadge,.responseMetaBar .thinkingBadge,.responseMetaBar .tokenUsageBadge{display:inline-flex;align-items:center;gap:4px;width:auto;min-height:26px;margin:0;padding:3px 8px;border:1px solid #ece7e2;border-radius:999px;background:#faf9f7;color:#746d66;font-size:10px;line-height:1.25;white-space:nowrap}
+.responseMetaBar .researchBadge{background:#f6faf7;border-color:#e3ebe5;color:#627268}
+.responseMetaBar .thinkingBadge{background:#f9f8fb;border-color:#e9e5ef;color:#6d6677}
+.responseMetaBar .tokenUsageBadge{background:transparent;color:#958d86}
+.responseMetaBar .runActivity{flex:0 1 auto;margin:0;border:0;border-radius:999px;background:transparent;overflow:visible;font-size:10px}
+.responseMetaBar .runActivity>summary{min-height:26px;padding:3px 8px;border:1px solid #ece7e2;border-radius:999px;background:#faf9f7;gap:6px;color:#746d66}
+.responseMetaBar .runActivity>summary>span{font-size:10px;font-weight:650}.responseMetaBar .runActivity>summary small{display:none}
+.responseMetaBar .runActivity[open]{flex-basis:100%;border-radius:10px}
+.responseMetaBar .runActivity[open]>summary{width:max-content;margin-bottom:5px}
+.responseMetaBar .runActivityBody{border:1px solid #ece7e2;border-radius:11px;background:#fbfaf8;padding:10px}
+
+/* ChatGPT-like source disclosure while preserving Daiki styling. */
+.assistantSources{position:relative;margin:0;padding:0;border:0;overflow:visible}
+.assistantSources>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:5px;min-height:26px;padding:3px 8px;border:1px solid #e7e4df;border-radius:999px;background:#fff;color:#625c56;font-size:10px;font-weight:650;user-select:none}
+.assistantSources>summary::-webkit-details-marker{display:none}.assistantSources>summary:hover{background:#f7f5f2;border-color:#dcd6d0}
+.assistantSources>summary>span{display:grid;place-items:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:#f0ede9;font-size:9px}
+.sourceDomainPreview{display:inline-flex;margin-left:1px;font-style:normal}.sourceDomainPreview b{width:16px;height:16px;margin-left:-3px;display:grid;place-items:center;border:1px solid #fff;border-radius:50%;background:#eee8e2;color:#726961;font-size:8px;font-weight:800}.sourceDomainPreview b:first-child{margin-left:0}
+.assistantSourcePanel{position:absolute;z-index:30;left:0;top:32px;width:min(460px,calc(100vw - 48px));max-height:min(440px,60vh);overflow:auto;padding:12px;border:1px solid #e5dfd9;border-radius:14px;background:#fff;box-shadow:0 14px 38px rgba(43,35,29,.14)}
+.assistantSourcePanelHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px}.assistantSourcePanelHead>div{display:grid;gap:1px}.assistantSourcePanelHead strong{font-size:12px}.assistantSourcePanelHead small{font-size:9px;color:#958d86}.assistantSourcePanelHead>span{display:grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:#f1eeea;font-size:10px}
+.assistantSourceList{display:grid;grid-template-columns:1fr;gap:5px}
+.assistantSourceList a{padding:8px 9px;border-radius:10px;background:#faf9f7}
+.assistantSourceList a strong{font-size:11px}.assistantSourceList a small{font-size:9px}
+
+@media(max-width:900px){
+  .messageRow.ai .bubble{font-size:14.5px;line-height:1.56}
+  .messageRow.ai .markdownBody p{line-height:1.56}
+  .responseMetaBar{gap:4px}
+}
+@media(max-width:620px){
+  .messageRow.ai .bubble{white-space:normal;font-size:14.5px;line-height:1.55}
+  .messageRow.ai .markdownBody p{margin-bottom:.62em;line-height:1.55}
+  .messageRow.ai .markdownBody h1,.messageRow.ai .markdownBody h2,.messageRow.ai .markdownBody h3{margin:.95em 0 .38em}
+  .messageRow.ai .markdownBody ul,.messageRow.ai .markdownBody ol{margin:.36em 0 .64em;padding-left:1.32em}
+  .messageRow.ai .markdownBody li{margin:.14em 0;line-height:1.52}
+  .responseMetaBar .tokenUsageBadge{display:none}
+  .assistantSourcePanel{position:fixed;z-index:90;left:10px;right:10px;top:auto;bottom:92px;width:auto;max-height:52vh;border-radius:16px}
+}
