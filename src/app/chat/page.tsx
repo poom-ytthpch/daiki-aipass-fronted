@@ -72,6 +72,12 @@ const errorText=(value:unknown):string=>{
   }
   return value==null?'':String(value);
 };
+const isAutoAttachmentPrompt=(value:string)=>{const n=value.trim().toLowerCase().replace(/[.!?]+$/,'');return ['please review the attached content','please review the attached file','please review the attached image','review the attached content'].includes(n)};
+const attachmentReviewPrompt=(messages:Msg[])=>{
+  for(let i=messages.length-1;i>=0;i--){const m=messages[i];if(m.role!=='user'||!m.text.trim()||isAutoAttachmentPrompt(m.text))continue;const t=m.text;if(/[\u0E00-\u0E7F]/.test(t))return 'ช่วยตรวจสอบไฟล์ที่แนบมานี้';if(/[\u3040-\u30FF]/.test(t))return '添付した内容を確認してください。';if(/[\uAC00-\uD7AF]/.test(t))return '첨부한 내용을 검토해 주세요.';if(/[\u4E00-\u9FFF]/.test(t))return '请查看附件内容。';if(/[A-Za-z]/.test(t))return 'Please review the attached content.'}
+  if(typeof navigator!=='undefined'&&navigator.language?.toLowerCase().startsWith('th'))return 'ช่วยตรวจสอบไฟล์ที่แนบมานี้';
+  return 'Please review the attached content.';
+};
 const friendlyGuestError=(code:string,retryAfterSeconds?:number)=>{
   const normalized=code.trim().toLowerCase();
   if(normalized==='guest_rate_limited')return `Please wait ${Math.max(1,Number(retryAfterSeconds||1))}s before sending another Guest message.`;
@@ -358,7 +364,7 @@ export default function Chat(){
   };
   const send=async()=>{
     if(!accessReady||(!text.trim()&&!attachments.length)||busy||uploading>0||(!guest&&quotaBlocked))return;setBusy(true);setAttachMenu(false);setUploadError('');
-    const q=text.trim();const currentAttachments=[...attachments];const content=q||'Please review the attached content.';
+    const q=text.trim();const currentAttachments=[...attachments];const content=q||attachmentReviewPrompt(msgs);
     try{
       if(guest){await sendGuest(content,currentAttachments);return}
       const current=await ensureSession(content);const stored=await saveSessionMessage(current,'user',content,currentAttachments.map(a=>a.id));
