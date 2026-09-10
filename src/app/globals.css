@@ -55,7 +55,6 @@
   .main{padding:22px 14px 46px}.pageHeader{gap:12px;margin-bottom:18px}.pageHeader h1,.h1{font-size:26px}.surface,.card{padding:15px;border-radius:12px}.accountGrid,.cards,.pastelGrid,.adminQuickGrid{grid-template-columns:1fr}.chatTopbarControls select{max-width:92px}.chatTopbarControls select:first-child{max-width:96px}.chatTopbarTitle strong{max-width:118px}.messageFeed{width:calc(100% - 18px)}.messageRow.user .messageAvatar{display:none}.messageRow.user .messageStack{max-width:88%}.messageRow.ai .messageStack{max-width:calc(100% - 34px)}.chatEmptyState>p{max-width:300px}.promptStarters{grid-template-columns:1fr;max-width:360px}.promptStarters button:nth-child(n+4){display:none}.composerDock{padding-left:8px;padding-right:8px}.composerBox{padding:7px 8px}.composerBox .chatInput{font-size:16px}.attachmentMenu{position:fixed;left:10px;right:10px;bottom:92px;width:auto}.historyActions{opacity:1}.chatHistory{width:min(90vw,330px)}
 }
 .chatPage{position:relative}.chatStage{position:relative}.composerDock{left:0}.sidebarHeader{position:relative}
-@media(min-width:901px){.appShell:has(.chatPage){grid-template-columns:72px minmax(0,1fr)}.appShell:has(.chatPage) .appSidebar{padding-left:9px;padding-right:9px}.appShell:has(.chatPage) .sidebarHeader{padding:0;justify-content:center}.appShell:has(.chatPage) .sidebarHeader .brand{flex:0}.appShell:has(.chatPage) .brandWord{font-size:0;width:34px;height:34px;border-radius:10px;background:var(--peach);display:grid;place-items:center}.appShell:has(.chatPage) .brandWord:before{content:"D";font-size:15px;font-weight:900}.appShell:has(.chatPage) .brandDot,.appShell:has(.chatPage) .brandSub,.appShell:has(.chatPage) .navLabel,.appShell:has(.chatPage) .navItem span,.appShell:has(.chatPage) .profileCopy,.appShell:has(.chatPage) .collapseButton{display:none}.appShell:has(.chatPage) .navItem{justify-content:center;padding:8px}.appShell:has(.chatPage) .profile{grid-template-columns:1fr;justify-items:center}.appShell:has(.chatPage) .profileMain{display:block;padding:0}}
 
 
 /* UX polish: touch, safe areas, readable admin tables */
@@ -192,3 +191,17 @@
 /* Guest policy admin controls */
 .guestPolicyCard{border-color:#eadfd6}.guestSwitch{display:flex;align-items:center;gap:8px;padding:8px 11px;border:1px solid var(--line);border-radius:999px;background:#faf8f6;font-size:11px;font-weight:800}.guestSwitch input{width:17px;height:17px;accent-color:var(--coral)}.guestPolicyGrid{grid-template-columns:repeat(3,minmax(0,1fr))}.guestPolicyGrid label{align-content:start}.guestPolicyGrid label small{font-size:10px;color:var(--muted);line-height:1.45}.guestPolicyFooter{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:18px;padding-top:18px;border-top:1px solid var(--line);font-size:11px}.guestPolicyFooter span{color:var(--muted)}
 @media(max-width:1000px){.guestPolicyGrid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){.guestPolicyGrid{grid-template-columns:1fr}.guestPolicyCard .sectionHead,.guestPolicyFooter{align-items:flex-start;flex-direction:column}.guestPolicyFooter .btn{width:100%}}
+
+/* Unified chat layout guardrails. The legacy 72px :has(.chatPage) rail was removed because
+   it overrode the newer full chat sidebar while leaving history content expanded. */
+.chatShell,.chatShell .main,.chatShell .chatPage,.chatShell .chatStage,.chatShell .chatScroll,.chatShell .messageFeed,.chatShell .messageRow,.chatShell .messageStack{min-width:0}
+.chatShell .main,.chatShell .chatStage{overflow:hidden}
+.chatShell .chatScroll{overflow-x:hidden}
+.chatShell .messageStack,.chatShell .bubble,.chatShell .markdownBody,.chatShell .runActivity,.chatShell .assistantSources{max-width:100%}
+.activityError,.runErrorTechnical code{overflow-wrap:anywhere;word-break:break-word}
+.runErrorSummary{display:grid;gap:4px;padding:9px 10px;border:1px solid #f0d7d2;border-radius:10px;background:#fff6f4;color:#8c443b}
+.runErrorSummary strong{font-size:11px}.runErrorSummary span{font-size:10px;line-height:1.5}
+.runErrorTechnical{margin-top:6px}.runErrorTechnical>summary{cursor:pointer;color:#8d837b;font-size:9px;font-weight:700}.runErrorTechnical code{display:block;margin-top:6px;padding:8px;border-radius:8px;background:#f8f5f2;color:#6c625a;font-size:9px;line-height:1.45;white-space:pre-wrap}
+@media(min-width:901px) and (max-width:1180px){.appShell.chatShell{grid-template-columns:224px minmax(0,1fr)}.chatShell .appSidebar{padding-left:9px;padding-right:9px}.chatSidebarSlot{min-height:190px}.chatTopbar{padding-left:12px;padding-right:12px}.chatTopbarControls{min-width:0;gap:5px}.chatTopbarControls select{max-width:112px}.messageFeed{width:min(760px,calc(100% - 28px))}}
+@media(min-width:1181px){.appShell.chatShell{grid-template-columns:274px minmax(0,1fr)}}
+@media(max-width:900px){.appShell.chatShell{grid-template-columns:1fr}.chatShell .appSidebar{width:min(88vw,320px)}.chatShell .main,.chatShell .chatPage,.chatShell .chatStage{width:100%;max-width:100%}}
