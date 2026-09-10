@@ -63,6 +63,15 @@ const errorText=(value:unknown):string=>{
   }
   return value==null?'':String(value);
 };
+const friendlyGuestError=(code:string,retryAfterSeconds?:number)=>{
+  const normalized=code.trim().toLowerCase();
+  if(normalized==='guest_rate_limited')return `Please wait ${Math.max(1,Number(retryAfterSeconds||1))}s before sending another Guest message.`;
+  if(normalized==='guest_quota_exhausted')return 'Guest token quota has been used up for the current window.';
+  if(normalized==='route unavailable')return 'This attachment needs a vision route, but no compatible model is currently available.';
+  if(normalized.includes('attachment'))return code;
+  if(normalized.includes('unavailable'))return 'Daiki is temporarily unavailable. Please try this message again.';
+  return code||'Gateway unavailable';
+};
 const friendlyRunError=(value?:string)=>{
   const raw=(value||'').trim();
   const lower=raw.toLowerCase();
@@ -317,7 +326,7 @@ export default function Chat(){
   const sendGuest=async(content:string,currentAttachments:Attachment[])=>{
     const userMsg:Msg={role:'user',text:content,attachments:currentAttachments};const history=[...msgs,userMsg];setMsgs([...history,{role:'ai',text:''}]);setText('');setAttachments([]);
     const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json',...guestDeviceHeaders()},body:JSON.stringify({model:'fast',researchMode:'off',thinkingMode:'off',attachmentIds:currentAttachments.map(a=>a.id),messages:history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),stream:true})});
-    if(!r.ok||!r.body){const d=await r.json().catch(()=>({error:'Gateway unavailable'}));const suffix=d.retryAfterSeconds?` Try again in ${d.retryAfterSeconds}s.`:'';throw new Error((errorText(d.error||d.detail)||'Gateway unavailable')+suffix)}
+    if(!r.ok||!r.body){const d=await r.json().catch(()=>({error:'Gateway unavailable'}));const raw=errorText(d.error||d.detail)||'Gateway unavailable';throw new Error(friendlyGuestError(raw,d.retryAfterSeconds))}
     const reader=r.body.getReader();const dec=new TextDecoder();let buf='';let answer='';
     while(true){const {done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';for(const raw of lines){const line=raw.trim();if(!line.startsWith('data:'))continue;const data=line.slice(5).trim();if(!data||data==='[DONE]')continue;const j=JSON.parse(data);if(j?.error)throw new Error(errorText(j.error));const chunk=j?.choices?.[0]?.delta?.content||'';if(chunk){answer+=chunk;setMsgs(xs=>xs.map((m,i)=>i===xs.length-1?{...m,text:answer}:m))}}}
     if(!answer)setMsgs(xs=>xs.map((m,i)=>i===xs.length-1?{...m,text:'I didn’t get a response back. Please try again.'}:m));
@@ -329,7 +338,7 @@ export default function Chat(){
       if(guest){await sendGuest(content,currentAttachments);return}
       const current=await ensureSession(content);const stored=await saveSessionMessage(current,'user',content,currentAttachments.map(a=>a.id));
       setMsgs(old=>[...old,{id:stored.id,role:'user',text:stored.content,attachments:currentAttachments}]);setText('');setAttachments([]);await startRun(current);await refreshSessions();
-    }catch(e){setMsgs(old=>{const last=old[old.length-1];const message=e instanceof Error?e.message:String(e);if(last?.role==='ai'&&!last.text)return old.map((m,i)=>i===old.length-1?{...m,text:`I couldn’t connect: ${message}`}:m);return [...old,{role:'ai',text:`I couldn’t start the run: ${message}`}]})}finally{setBusy(false)}
+    }catch(e){setMsgs(old=>{const last=old[old.length-1];const message=e instanceof Error?e.message:String(e);const display=guest?message:`I couldn’t connect: ${message}`;if(last?.role==='ai'&&!last.text)return old.map((m,i)=>i===old.length-1?{...m,text:display}:m);return [...old,{role:'ai',text:guest?message:`I couldn’t start the run: ${message}`}]})}finally{setBusy(false)}
   };
   const editAndRetry=async(message:Msg,content:string)=>{
     if(!sessionId||!message.id||busy)return;const next=content.trim();if(!next)return;setBusy(true);setUploadError('');
