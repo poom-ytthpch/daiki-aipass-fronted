@@ -5,6 +5,7 @@ import {usePathname} from 'next/navigation';
 import {ChevronLeft,ChevronRight,LogOut,Menu,X} from 'lucide-react';
 import {useEffect,useState} from 'react';
 import {NavItem,NavIcon} from '@/components/NavItem';
+import {LanguageSwitcher} from '@/i18n/LanguageSwitcher';
 
 type Item={label:string;href:string;icon:NavIcon};
 
@@ -49,6 +50,7 @@ export function AppShellClient({children,admin,adminNav,workspace,homeHref,name,
         <div className="navGroup"><div className="navLabel">Workspace</div><nav className="nav">{workspace.map(x=><NavItem key={x.href} {...x}/>)}</nav></div>
         {admin?<div className="navGroup"><div className="navLabel">Admin</div><nav className="nav">{adminNav.map(x=><NavItem key={x.href} {...x}/>)}</nav></div>:null}
       </div>
+      <div className="sidebarLocale"><LanguageSwitcher/></div>
       <div className="profile">
         <Link className="profileMain" href="/account"><div className="avatar">{name.slice(0,1).toUpperCase()}</div><div className="profileCopy"><strong>{name}</strong><span>{admin?'Administrator':status}</span></div></Link>
         <a className="signout iconButton" href="/api/auth/logout" aria-label="Sign out" title="Sign out"><LogOut size={17}/></a>

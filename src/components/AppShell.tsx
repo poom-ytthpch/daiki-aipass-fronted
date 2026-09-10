@@ -2,6 +2,7 @@ import {getSession,isAdmin} from '@/lib/auth';
 import {backendFetch} from '@/lib/backend';
 import {NavIcon} from '@/components/NavItem';
 import {AppShellClient} from '@/components/AppShellClient';
+import {LanguageSwitcher} from '@/i18n/LanguageSwitcher';
 
 type Me={status?:'pending'|'approved'|'suspended'|'rejected';isAdmin?:boolean};
 type Item={label:string;href:string;icon:NavIcon};
@@ -26,7 +27,7 @@ const adminNav:Item[]=[
 ];
 export async function AppShell({children}:{children:React.ReactNode}){
   const session=await getSession();
-  if(!session)return <>{children}</>;
+  if(!session)return <><LanguageSwitcher variant="floating"/>{children}</>;
   let me:Me={};
   try{const r=await backendFetch('/v1/me');if(r.ok)me=await r.json() as Me}catch{}
   const admin=Boolean(me.isAdmin)||isAdmin(session);
