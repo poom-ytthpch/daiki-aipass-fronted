@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import {FormEvent,useEffect,useMemo,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {Brain,Check,Copy,File,FolderOpen,Globe2,History,Image as ImageIcon,Menu,Paperclip,Pause,Pencil,Play,Plus,RotateCcw,Search,Send,Trash2,X} from 'lucide-react';
+import {Brain,Check,Copy,File,FolderOpen,Globe2,Image as ImageIcon,MoreHorizontal,Paperclip,Pause,Pencil,Play,Plus,RotateCcw,Search,Send,Trash2,X} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -45,6 +45,18 @@ const thinkingLevels=[
   {id:'medium' as const,label:'Medium',effort:'medium',completion:2560,description:'Balanced native reasoning for analysis, coding and multi-step questions.'},
   {id:'high' as const,label:'High',effort:'high',completion:4096,description:'Deeper native reasoning for difficult analysis, edge cases and complex planning.'},
 ];
+type HistoryGroup={label:string;sessions:ChatSession[]};
+function groupChatSessions(rows:ChatSession[]):HistoryGroup[]{
+  const now=new Date();const today=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
+  const buckets=new Map<string,ChatSession[]>();
+  for(const session of rows){
+    const d=new Date(session.updatedAt);const day=new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime();
+    const age=Math.max(0,Math.floor((today-day)/86_400_000));
+    const label=age===0?'Today':age===1?'Yesterday':age<=7?'Previous 7 days':age<=30?'Previous 30 days':d.toLocaleDateString(undefined,{month:'long',year:'numeric'});
+    const bucket=buckets.get(label)||[];bucket.push(session);buckets.set(label,bucket);
+  }
+  return Array.from(buckets,([label,sessions])=>({label,sessions}));
+}
 const fmtTokens=(n:number)=>n>=1_000_000?`${Number((n/1_000_000).toFixed(n>=10_000_000?0:2))}M`:n>=1000?`${Number((n/1000).toFixed(n>=100_000?0:1))}K`:String(Math.max(0,Math.round(n)));
 const starters=[
   ['Explain','Explain this simply: '],
@@ -152,6 +164,8 @@ export default function Chat(){
   const [sessionId,setSessionId]=useState('');
   const [historyBusy,setHistoryBusy]=useState(false);
   const [historyQuery,setHistoryQuery]=useState('');
+  const [historyResults,setHistoryResults]=useState<ChatSession[]>([]);
+  const [historySearching,setHistorySearching]=useState(false);
   const [sidebarTarget,setSidebarTarget]=useState<HTMLElement|null>(null);
   const [renamingId,setRenamingId]=useState('');
   const [renameText,setRenameText]=useState('');
@@ -167,6 +181,7 @@ export default function Chat(){
   const imageRef=useRef<HTMLInputElement>(null);
   const folderRef=useRef<HTMLInputElement>(null);
   const textareaRef=useRef<HTMLTextAreaElement>(null);
+  const historySearchRef=useRef<HTMLInputElement>(null);
   const scrollRef=useRef<HTMLDivElement>(null);
 
   const runBlocking=Boolean(currentRun&&['queued','running','paused'].includes(currentRun.status));
@@ -193,10 +208,8 @@ export default function Chat(){
     return Math.min(16000,Math.ceil(bytes/4)+256);
   },[msgs,text]);
   const estimatedTotal=estimatedInput+thinking.completion;
-  const filteredSessions=useMemo(()=>{
-    const q=historyQuery.trim().toLowerCase();
-    return q?sessions.filter(s=>s.title.toLowerCase().includes(q)):sessions;
-  },[sessions,historyQuery]);
+  const visibleHistorySessions=historyQuery.trim()?historyResults:sessions;
+  const historyGroups=useMemo(()=>historyQuery.trim()?[{label:'Search results',sessions:visibleHistorySessions}]:groupChatSessions(visibleHistorySessions),[historyQuery,visibleHistorySessions]);
 
   useEffect(()=>{
     folderRef.current?.setAttribute('webkitdirectory','');
@@ -229,6 +242,20 @@ export default function Chat(){
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
   useEffect(()=>{setSidebarTarget(document.getElementById('chat-sidebar-slot'))},[]);
+  useEffect(()=>{
+    if(!accessReady||guest)return;
+    const q=historyQuery.trim();
+    if(!q){setHistoryResults([]);setHistorySearching(false);return}
+    let cancelled=false;setHistoryResults([]);setHistorySearching(true);
+    const timer=window.setTimeout(async()=>{
+      try{const r=await fetch(`/api/chat-sessions?q=${encodeURIComponent(q)}`,{cache:'no-store'});if(r.ok&&!cancelled){const d=await r.json() as {sessions:ChatSession[]};setHistoryResults(d.sessions||[])}}catch{}finally{if(!cancelled)setHistorySearching(false)}
+    },250);
+    return()=>{cancelled=true;window.clearTimeout(timer)};
+  },[accessReady,guest,historyQuery]);
+  useEffect(()=>{
+    const onSearch=(e:KeyboardEvent)=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();window.dispatchEvent(new Event('daiki-open-navigation'));window.setTimeout(()=>historySearchRef.current?.focus(),180)}};
+    window.addEventListener('keydown',onSearch);return()=>window.removeEventListener('keydown',onSearch);
+  },[]);
   useEffect(()=>{scrollRef.current?.scrollTo({top:scrollRef.current.scrollHeight,behavior:'smooth'})},[msgs,currentRun?.status]);
   useEffect(()=>{const el=textareaRef.current;if(!el)return;el.style.height='auto';el.style.height=`${Math.min(el.scrollHeight,180)}px`},[text]);
   useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setAttachMenu(false);setEditingMessageId(null)}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[]);
@@ -300,10 +327,10 @@ export default function Chat(){
     setCurrentRun(latest&&latest.status!=='completed'?latest:null);localStorage.setItem('daiki_current_session',d.session.id);
     setAttachments([]);if(!preserveComposer)setText('');if(closeHistory)window.dispatchEvent(new Event('daiki-close-navigation'));return true;
   };
-  const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setUploadError('');setEditingMessageId(null);localStorage.removeItem('daiki_current_session');window.dispatchEvent(new Event('daiki-close-navigation'))};
+  const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setUploadError('');setEditingMessageId(null);setHistoryQuery('');setHistoryResults([]);localStorage.removeItem('daiki_current_session');window.dispatchEvent(new Event('daiki-close-navigation'))};
   const openSession=async(id:string,closeHistory=true)=>{setHistoryBusy(true);try{await loadSessionData(id,closeHistory,false)}finally{setHistoryBusy(false)}};
-  const deleteSession=async(id:string)=>{if(id===sessionId&&runBlocking)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'DELETE'});if(r.ok){if(sessionId===id)newChat();await refreshSessions()}};
-  const renameSession=async(id:string)=>{const title=renameText.trim();if(!title)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({title})});if(r.ok){const updated=await r.json() as ChatSession;setSessions(xs=>xs.map(x=>x.id===id?updated:x));setRenamingId('');setRenameText('')}};
+  const deleteSession=async(id:string)=>{if(id===sessionId&&runBlocking)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'DELETE'});if(r.ok){setHistoryResults(xs=>xs.filter(x=>x.id!==id));if(sessionId===id)newChat();await refreshSessions()}};
+  const renameSession=async(id:string)=>{const title=renameText.trim();if(!title)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({title})});if(r.ok){const updated=await r.json() as ChatSession;setSessions(xs=>xs.map(x=>x.id===id?updated:x));setHistoryResults(xs=>xs.map(x=>x.id===id?updated:x));setRenamingId('');setRenameText('')}};
   const ensureSession=async(title:string)=>{
     if(guest)return '';
     if(sessionId)return sessionId;
@@ -348,21 +375,21 @@ export default function Chat(){
 
   const chatSidebar=<>
     <div className="chatHistoryHead"><button className="newChatButton" type="button" onClick={newChat}><Plus size={17}/><span>New chat</span></button></div>
-    <label className="historySearch"><Search size={15}/><input value={historyQuery} onChange={e=>setHistoryQuery(e.target.value)} placeholder="Search chats"/></label>
-    <div className="historyList chatHistoryList">
-      {filteredSessions.length?filteredSessions.map(s=><div key={s.id} className={`historyItem ${sessionId===s.id?'active':''}`}>
-        {renamingId===s.id?<form className="renameForm" onSubmit={e=>{e.preventDefault();void renameSession(s.id)}}><input autoFocus value={renameText} onChange={e=>setRenameText(e.target.value)} onBlur={()=>{if(renameText.trim())void renameSession(s.id);else setRenamingId('')}}/></form>:<button type="button" disabled={historyBusy} onClick={()=>void openSession(s.id)}><History size={14}/><span><strong>{s.title}</strong><small>{new Date(s.updatedAt).toLocaleDateString()}</small></span></button>}
-        <div className="historyActions"><button type="button" aria-label={`Rename ${s.title}`} onClick={()=>{setRenamingId(s.id);setRenameText(s.title)}}><Pencil size={12}/></button><button type="button" aria-label={`Delete ${s.title}`} onClick={()=>void deleteSession(s.id)}><Trash2 size={12}/></button></div>
-      </div>):<div className="historyEmpty">{historyQuery?'No matching chats':'Your chats will appear here.'}</div>}
+    <label className="historySearch"><Search size={15}/><input ref={historySearchRef} value={historyQuery} onChange={e=>setHistoryQuery(e.target.value)} placeholder="Search chats"/><kbd>⌘K</kbd></label>
+    <div className="historyList chatHistoryList" aria-busy={historySearching}>
+      {historySearching?<div className="historySearching"><span/><span/><span/></div>:null}
+      {visibleHistorySessions.length?historyGroups.map(group=><section className="historyGroup" key={group.label}><div className="historyGroupLabel">{group.label}</div>{group.sessions.map(s=><div key={s.id} className={`historyItem ${sessionId===s.id?'active':''}`}>
+        {renamingId===s.id?<form className="renameForm" onSubmit={e=>{e.preventDefault();void renameSession(s.id)}}><input autoFocus value={renameText} onChange={e=>setRenameText(e.target.value)} onBlur={()=>{if(renameText.trim())void renameSession(s.id);else setRenamingId('')}}/></form>:<button type="button" disabled={historyBusy} onClick={()=>void openSession(s.id)} title={s.title}><strong>{s.title}</strong></button>}
+        <details className="historyMenu"><summary aria-label={`More options for ${s.title}`}><MoreHorizontal size={16}/></summary><div className="historyMenuPopover"><button type="button" onClick={e=>{const details=e.currentTarget.closest('details');if(details)details.open=false;setRenamingId(s.id);setRenameText(s.title)}}><Pencil size={14}/><span>Rename</span></button><button className="danger" type="button" onClick={e=>{const details=e.currentTarget.closest('details');if(details)details.open=false;void deleteSession(s.id)}}><Trash2 size={14}/><span>Delete</span></button></div></details>
+      </div>)}</section>):<div className="historyEmpty">{historyQuery?(historySearching?'Searching…':'No matching chats'):'Your chats will appear here.'}</div>}
     </div>
     {capabilities?<div className="chatHistoryFoot"><span>Smart Assist</span><strong>On</strong><small>{capabilities.skills.length} skills · {capabilities.tools.length} tools</small></div>:null}
-  </>
-
+  </>;
   return <div className="chatPage">
     {!guest&&sidebarTarget?createPortal(chatSidebar,sidebarTarget):null}
     <section className="chatStage">
       <header className="chatTopbar">
-        <div className="chatTopbarTitle">{accessReady&&!guest?<button className="iconButton historyToggle" type="button" aria-label="Open navigation" onClick={()=>window.dispatchEvent(new Event('daiki-open-navigation'))}><Menu size={19}/></button>:<div className="guestMark">D</div>}<div><strong>{!accessReady?'Daiki AI Passport':guest?'Guest chat':currentSession?.title||'New chat'}</strong><small>{!accessReady?'Preparing chat…':busy?'Daiki is thinking…':guest?'Fast mode · temporary chat':'Daiki AI Passport'}</small></div></div>
+        <div className="chatTopbarTitle">{guest?<div className="guestMark">D</div>:null}<div><strong>{!accessReady?'Daiki AI Passport':guest?'Guest chat':currentSession?.title||'New chat'}</strong><small>{!accessReady?'Preparing chat…':busy?'Daiki is thinking…':guest?'Fast mode · temporary chat':'Daiki AI Passport'}</small></div></div>
         {!accessReady?<div className="guestTopbarControls"><span>Checking access…</span></div>:guest?<div className="guestTopbarControls"><span>Guest · Fast</span><Link className="btn compact primary" href="/login">Sign in</Link></div>:<div className="chatTopbarControls">
           {quota?.mode==='limited'&&!quotaIndicatorHidden?<details className={`quotaControl ${quotaBlocked?'blocked':''}`}>
             <summary><span className="quotaStatusDot"/><span>{quotaBlocked?'Quota blocked':`Quota · ${fmtTokens(Number(quota.remaining||0))} left`}</span></summary>

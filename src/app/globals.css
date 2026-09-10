@@ -264,3 +264,76 @@
   .responseMetaBar .tokenUsageBadge{display:none}
   .assistantSourcePanel{position:fixed;z-index:90;left:10px;right:10px;top:auto;bottom:92px;width:auto;max-height:52vh;border-radius:16px}
 }
+
+/* Chat history v2: ChatGPT-like hierarchy with Daiki styling. */
+.chatSidebarSlot{flex:1 1 0;min-height:0;max-height:none;padding:0 0 8px;margin:0 0 8px;border-bottom:1px solid var(--line)}
+.chatSidebarSlot .chatHistoryList{margin:4px 0 6px;padding:0 2px 4px 0;overflow-y:auto;overflow-x:visible}
+.chatHistoryHead{padding:0 1px}.newChatButton{height:38px;border-color:transparent;background:transparent;padding:0 9px;border-radius:9px}.newChatButton:hover{background:#ebe8e4}.newChatButton span{font-size:12px;font-weight:680}
+.historySearch{height:36px;margin:7px 1px 8px;padding:0 9px;border-color:transparent;background:#ece9e5;border-radius:9px}.historySearch input{font-size:12px}.historySearch kbd{flex:0 0 auto;border:0;background:transparent;color:#9c948d;font:600 9px/1 ui-monospace,SFMono-Regular,Menlo,monospace}
+.historyGroup{display:grid;gap:1px;margin:0 0 11px}.historyGroup:last-child{margin-bottom:2px}.historyGroupLabel{padding:7px 8px 4px;color:#8f877f;font-size:10px;font-weight:720;line-height:1.2}
+.chatHistory .historyItem,.chatSidebarSlot .historyItem{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 30px;align-items:center;min-height:36px;border:0;border-radius:8px;background:transparent}
+.chatSidebarSlot .historyItem:hover{background:#eeebe7}.chatSidebarSlot .historyItem.active{background:#e6e2dd;border:0}
+.chatSidebarSlot .historyItem>button:first-child{width:100%;min-width:0;height:36px;padding:0 8px;border:0;background:transparent;display:block;text-align:left;cursor:pointer;color:var(--ink)}
+.chatSidebarSlot .historyItem>button:first-child:disabled{cursor:wait}.chatSidebarSlot .historyItem>button:first-child strong{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:580;line-height:36px}.chatSidebarSlot .historyItem.active>button:first-child strong{font-weight:680}
+.historyMenu{position:relative;width:30px;height:30px;opacity:0;transition:opacity .12s ease}.historyItem:hover .historyMenu,.historyItem:focus-within .historyMenu,.historyMenu[open]{opacity:1}.historyMenu>summary{list-style:none;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#817971;cursor:pointer}.historyMenu>summary::-webkit-details-marker{display:none}.historyMenu>summary:hover,.historyMenu[open]>summary{background:#f8f6f3;color:#302c28}
+.historyMenuPopover{position:absolute;z-index:65;right:0;top:32px;width:148px;padding:5px;border:1px solid #e3ded8;border-radius:11px;background:#fff;box-shadow:0 12px 32px rgba(37,31,26,.16);display:grid;gap:2px}.historyMenuPopover button{width:100%;height:34px;border:0;border-radius:7px;background:transparent;padding:0 8px;display:flex;align-items:center;gap:8px;color:#514b46;font-size:11px;text-align:left;cursor:pointer}.historyMenuPopover button:hover{background:#f5f2ef}.historyMenuPopover button.danger{color:#b35146}.historyMenuPopover button.danger:hover{background:#fff1ef}
+.renameForm{grid-column:1/2;padding:3px 5px}.renameForm input{height:30px;font-size:12px}.historySearching{height:24px;padding:6px 9px;display:flex;gap:4px;align-items:center}.historySearching span{width:4px;height:4px;border-radius:50%;background:#a59d95;animation:typingPulse 1.2s infinite ease-in-out}.historySearching span:nth-child(2){animation-delay:.15s}.historySearching span:nth-child(3){animation-delay:.3s}.historyEmpty{padding:20px 9px;font-size:11px}.chatHistoryFoot{padding:8px 7px 2px;font-size:9px;background:linear-gradient(to bottom,rgba(247,245,242,0),#f7f5f2 28%)}
+.chatShell .appSidebar .sidebarScroll{overflow:hidden}.chatShell .appSidebar .navGroup{flex:0 0 auto;margin:0 0 8px}.chatShell .appSidebar .navLabel{margin-top:3px}.chatShell .profile{flex:0 0 auto}
+
+/* Mobile chat v2: one navigation owner, no horizontal page overflow, compact controls. */
+@media(max-width:900px){
+  .chatShell .historyToggle{display:none!important}
+  .chatShell .appSidebar{width:min(92vw,340px)}
+  .chatShell .appSidebar .sidebarScroll{display:flex;overflow:hidden}
+  .chatShell .chatSidebarSlot{flex:1 1 0;min-height:180px;max-height:none}
+  .chatShell .chatTopbar{height:46px;min-height:46px;flex:0 0 46px;padding:5px 10px;gap:6px}
+  .chatShell .chatTopbarTitle{min-width:0;flex:1 1 auto}.chatShell .chatTopbarTitle strong{max-width:min(34vw,220px)}
+  .chatShell .chatTopbarControls{min-width:0;max-width:100%;gap:4px}
+  .chatShell .chatTopbarControls select{min-width:0;max-width:104px}
+  .chatShell .messageFeed{width:min(760px,100%);padding-left:14px;padding-right:14px}
+  .chatShell .composerDock{width:100%;max-width:100%;padding-left:10px;padding-right:10px}
+  .chatShell .composerBox{width:min(800px,100%);max-width:100%}
+  .chatShell .attachmentTray{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+  .chatShell .responseMetaBar{max-width:100%}
+  .historyMenu{opacity:1}
+}
+@media(max-width:620px){
+  html,body{max-width:100%;overflow-x:hidden}
+  .chatShell .mobileTopbar{height:calc(52px + env(safe-area-inset-top));min-height:calc(52px + env(safe-area-inset-top));padding-left:10px;padding-right:10px}
+  .chatShell{grid-template-rows:calc(52px + env(safe-area-inset-top)) minmax(0,1fr)}
+  .chatShell .main:has(.chatPage){height:calc(100dvh - 52px - env(safe-area-inset-top))}
+  .chatShell .chatTopbar{height:44px;min-height:44px;flex:0 0 44px;padding:4px 8px;display:flex;align-items:center;justify-content:flex-end}
+  .chatShell .chatTopbarTitle{display:none}
+  .chatShell .chatTopbarControls{display:flex;width:100%;min-width:0;overflow:visible;overscroll-behavior:auto;padding:0;gap:4px}
+  .chatShell .chatTopbarControls .quotaControl,.chatShell .chatTopbarControls .thinkingControl{flex:0 0 36px;min-width:36px}
+  .chatShell .quotaControl>summary,.chatShell .thinkingControl>summary{width:36px;height:36px;min-height:36px}
+  .chatShell .chatTopbarControls select{flex:1 1 0;width:0;min-width:0!important;max-width:none!important;height:36px;min-height:36px;padding-left:7px;padding-right:19px;font-size:10px;text-overflow:ellipsis}
+  .chatShell .messageFeed{width:100%;padding:8px 12px 118px}
+  .chatShell .messageRow{max-width:100%}.chatShell .messageRow.ai{padding:12px 0 16px}.chatShell .messageRow.user{padding:7px 0 11px 34px}
+  .chatShell .messageRow.ai .messageStack,.chatShell .messageRow.user .messageStack{width:100%;max-width:100%}
+  .chatShell .messageRow.ai .markdownBody pre{width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .chatShell .messageRow.ai .markdownBody table{width:100%;max-width:100%;margin:12px 0;padding:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .chatShell .messageRow.ai .markdownBody th,.chatShell .messageRow.ai .markdownBody td{min-width:96px}
+  .chatShell .responseMetaBar{width:100%;overflow:visible}.chatShell .responseMetaBar>*{max-width:100%}
+  .chatShell .responseMetaBar .researchBadge,.chatShell .responseMetaBar .thinkingBadge{white-space:normal}
+  .chatShell .composerDock{padding:8px 7px calc(6px + env(safe-area-inset-bottom))}
+  .chatShell .composerBox{padding:6px;border-radius:17px}
+  .chatShell .composerRow{width:100%;min-width:0}.chatShell .composerBox .chatInput{min-width:0;width:100%;padding-left:6px;padding-right:6px}
+  .chatShell .attachmentChip{min-width:min(170px,72vw);max-width:78vw}
+  .chatShell .thinkingPopover,.chatShell .quotaPopover{left:8px;right:8px;bottom:calc(78px + env(safe-area-inset-bottom));width:auto;max-width:calc(100vw - 16px)}
+  .chatShell .tokenBudget>div{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 6px}.chatShell .tokenBudget i{opacity:.55}
+  .chatShell .assistantSourcePanel{left:8px;right:8px;bottom:calc(78px + env(safe-area-inset-bottom));max-width:calc(100vw - 16px)}
+  .chatShell .appSidebar{width:min(94vw,350px);padding-left:10px;padding-right:10px}
+  .chatShell .chatSidebarSlot{min-height:160px}.historySearch kbd{display:none}.historyGroupLabel{padding-left:9px}.chatSidebarSlot .historyItem{min-height:40px}.chatSidebarSlot .historyItem>button:first-child{height:40px}.chatSidebarSlot .historyItem>button:first-child strong{line-height:40px;font-size:13px}.historyMenu,.historyMenu>summary{width:38px;height:38px}.historyMenuPopover{right:2px;top:40px;width:156px}.historyMenuPopover button{height:38px;font-size:12px}
+}
+@media(max-width:390px){
+  .chatShell .messageFeed{padding-left:10px;padding-right:10px}.chatShell .messageRow.user{padding-left:24px}
+  .chatShell .chatTopbarControls select{font-size:9px;padding-left:5px;padding-right:16px}
+}
+@media(max-width:620px){
+  .chatPage:has(.guestTopbarControls) .chatTopbar{height:54px;min-height:54px;flex:0 0 54px;padding:6px 10px;display:flex;grid-template-columns:none;align-items:center;justify-content:space-between;gap:8px}
+  .chatPage:has(.guestTopbarControls) .chatTopbarTitle{display:flex;min-width:0;flex:1}.chatPage:has(.guestTopbarControls) .chatTopbarTitle strong{max-width:50vw}
+  .chatPage:has(.guestTopbarControls) .guestTopbarControls{flex:0 0 auto}
+  .chatPage:has(.guestTopbarControls) .messageFeed{width:100%;padding-left:12px;padding-right:12px}
+  .chatPage:has(.guestTopbarControls) .composerDock{width:100%;max-width:100%;padding-left:7px;padding-right:7px}
+}
