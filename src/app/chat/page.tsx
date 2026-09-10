@@ -16,8 +16,8 @@ type QuotaLimitState={id:string;primary?:boolean;limit:number;used:number;remain
 type QuotaState={mode?:string;limit?:number;used?:number;remaining?:number;resetAt?:string;interval?:string;intervalCount?:number;windowStart?:string;blocked?:boolean;blockingLimitId?:string;limits?:QuotaLimitState[];resetCredits?:ResetCredits};
 type UsageResponse={usage?:{inputTokens?:number;outputTokens?:number;totalTokens?:number};quota?:QuotaState};
 type RunActivity={phase?:string;durationMs?:number;requestId?:string;httpStatus?:number;retryAfterSeconds?:number;quota?:QuotaState;research?:{mode?:string;query?:string;used?:boolean;error?:string;sourceCount?:number;sources?:RunSource[]};thinking?:{mode?:string;reasoningBudget?:number;requestedEffort?:string;effectiveEffort?:string;nativeReasoning?:boolean;model?:string;estimate?:unknown};tokens?:TokenUsage};
-type ChatRun={id:string;sessionId:string;status:'queued'|'running'|'paused'|'completed'|'failed'|'cancelled';researchMode:string;thinkingMode:string;requestId?:string;content:string;error?:string;activity?:RunActivity;createdAt:string;startedAt?:string;completedAt?:string;updatedAt:string};
-type Msg={id?:number;role:'user'|'ai';text:string;attachments?:Attachment[];runId?:string;run?:ChatRun};
+type ChatRun={id:string;sessionId:string;status:'queued'|'running'|'paused'|'completed'|'failed'|'cancelled';researchMode:string;thinkingMode:string;commandMode?:string;commandSkills?:string[];requestId?:string;content:string;error?:string;activity?:RunActivity;createdAt:string;startedAt?:string;completedAt?:string;updatedAt:string};
+type Msg={id?:number;role:'user'|'ai';text:string;attachments?:Attachment[];sources?:RunSource[];runId?:string;run?:ChatRun};
 type ChatSession={id:string;title:string;modelAlias:string;pinnedAt?:string;createdAt:string;updatedAt:string};
 type StoredMessage={id:number;role:'user'|'assistant';content:string;attachmentIds:string[];runId?:string;createdAt:string};
 type PendingPolicy={model:string;tokenLimitPerDay:number;requestsPerHour:number;minIntervalSeconds:number;maxCompletionTokens:number;textOnly:boolean};
@@ -25,7 +25,9 @@ type Account={status?:'pending'|'approved'|'suspended'|'rejected';pendingChatPol
 type GuestPolicy={enabled:boolean;model:string;tokenLimit:number;intervalKind:string;requestsPerHour:number;minIntervalSeconds:number;maxCompletionTokens:number;allowUploads:boolean;allowImageGeneration:boolean;allowFileGeneration:boolean;maxUploadBytes:number;maxUploadsPerHour:number;maxStoredFiles:number;maxStoredBytes:number;attachmentRetentionHours:number;imageGenerationsPerDay:number;fileGenerationsPerDay:number;maxGeneratedFileBytes:number};
 type ThinkingMode='off'|'low'|'medium'|'high';
 type Prefs={defaultModel?:string;responseStyle?:string;researchMode?:'auto'|'web'|'off';thinkingMode?:ThinkingMode};
-type CapabilityInfo={mode:string;maxToolRounds:number;skills:{id:string;name:string;description:string}[];tools:{id:string;name:string;description:string}[]};
+type CommandOption={id:string;name:string;description:string;guest?:boolean};
+type CommandCatalog={modes:CommandOption[];skills:CommandOption[]};
+type CapabilityInfo={mode:string;maxToolRounds:number;skills:{id:string;name:string;description:string}[];tools:{id:string;name:string;description:string}[];commands?:CommandCatalog};
 const guestDeviceHeaders=()=>{
   if(typeof window==='undefined')return {} as Record<string,string>;
   let id=localStorage.getItem('daiki_guest_device_id')||'';
@@ -100,6 +102,12 @@ const friendlyRunError=(value?:string)=>{
   return raw;
 };
 
+function decodeGuestResearchSources(response:Response):RunSource[]{
+  const encoded=response.headers.get('x-daiki-research-sources-json');
+  if(!encoded)return [];
+  try{const binary=atob(encoded);const bytes=Uint8Array.from(binary,c=>c.charCodeAt(0));const value=JSON.parse(new TextDecoder().decode(bytes));return Array.isArray(value)?value as RunSource[]:[]}catch{return []}
+}
+
 function sourceHost(value?:string){
   if(!value)return '';
   try{return new URL(value).hostname.replace(/^www\./,'')}catch{return ''}
@@ -149,6 +157,11 @@ export default function Chat(){
   const [text,setText]=useState('');
   const [localBusy,setBusy]=useState(false);
   const [capabilities,setCapabilities]=useState<CapabilityInfo|null>(null);
+  const [commandMode,setCommandMode]=useState('');
+  const [commandSkills,setCommandSkills]=useState<string[]>([]);
+  const [commandMenu,setCommandMenu]=useState<'mode'|'skill'|''>('');
+  const [commandQuery,setCommandQuery]=useState('');
+  const [commandIndex,setCommandIndex]=useState(0);
   const [uploading,setUploading]=useState(0);
   const [model,setModel]=useState('auto');
   const [researchMode,setResearchMode]=useState<'auto'|'web'|'off'>('auto');
@@ -205,6 +218,10 @@ export default function Chat(){
   const effectiveThinkingMode:ThinkingMode=(pending||guest)?'off':thinkingMode;
   const thinkingIndex=Math.max(0,thinkingLevels.findIndex(x=>x.id===effectiveThinkingMode));
   const thinking=thinkingLevels[thinkingIndex]||thinkingLevels[2];
+  const commandCatalog=capabilities?.commands;
+  const commandItems=useMemo(()=>{const rows=commandMenu==='mode'?(commandCatalog?.modes||[]):commandMenu==='skill'?(commandCatalog?.skills||[]):[];const q=commandQuery.trim().toLowerCase();return (q?rows.filter(x=>x.id.includes(q)||x.name.toLowerCase().includes(q)||x.description.toLowerCase().includes(q)):rows).slice(0,9)},[commandCatalog,commandMenu,commandQuery]);
+  const selectedModeOption=commandCatalog?.modes.find(x=>x.id===commandMode);
+  const selectedSkillOptions=commandSkills.map(id=>commandCatalog?.skills.find(x=>x.id===id)).filter((x):x is CommandOption=>Boolean(x));
   const estimatedInput=useMemo(()=>{
     const content=[...msgs.map(m=>m.text),text].join('\n');
     const bytes=new TextEncoder().encode(content).length;
@@ -237,7 +254,7 @@ export default function Chat(){
         }
       }catch{}
       guestDeviceHeaders();setGuest(true);setModel('fast');setResearchMode('off');setThinkingMode('off');
-      try{const gp=await fetch('/api/guest/policy',{cache:'no-store'});if(gp.ok)setGuestPolicy(await gp.json() as GuestPolicy)}catch{}
+      try{const [gp,cap]=await Promise.all([fetch('/api/guest/policy',{cache:'no-store'}),fetch('/api/guest/capabilities',{cache:'no-store',headers:guestDeviceHeaders()})]);if(gp.ok)setGuestPolicy(await gp.json() as GuestPolicy);if(cap.ok)setCapabilities(await cap.json() as CapabilityInfo)}catch{}
       setAccessReady(true);
     })();
     return()=>window.clearTimeout(prefTimer);
@@ -261,7 +278,7 @@ export default function Chat(){
   },[]);
   useEffect(()=>{scrollRef.current?.scrollTo({top:scrollRef.current.scrollHeight,behavior:'smooth'})},[msgs,currentRun?.status]);
   useEffect(()=>{const el=textareaRef.current;if(!el)return;el.style.height='auto';el.style.height=`${Math.min(el.scrollHeight,180)}px`},[text]);
-  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setAttachMenu(false);setEditingMessageId(null)}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[]);
+  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setAttachMenu(false);setCommandMenu('');setEditingMessageId(null)}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[]);
   useEffect(()=>{if(!quota?.resetAt)return;const timer=window.setInterval(()=>setQuotaClock(Date.now()),1000);return()=>window.clearInterval(timer)},[quota?.resetAt]);
   useEffect(()=>{if(!accessReady||guest)return;const timer=window.setInterval(()=>void refreshUsage(),20000);const wake=()=>{if(document.visibilityState==='visible')void refreshUsage()};window.addEventListener('focus',wake);document.addEventListener('visibilitychange',wake);return()=>{window.clearInterval(timer);window.removeEventListener('focus',wake);document.removeEventListener('visibilitychange',wake)}},[accessReady,guest]);
   useEffect(()=>{
@@ -281,6 +298,31 @@ export default function Chat(){
     // Polling is keyed by persisted run identity/status; helper identity is intentionally excluded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[currentRun?.id,currentRun?.status,sessionId]);
+
+  const updateComposerText=(value:string)=>{
+    setText(value);
+    const match=value.match(/(?:^|\s)([/@])([a-zA-Z0-9-]*)$/);
+    if(match)setAttachMenu(false);
+    if(!match){setCommandMenu('');setCommandQuery('');return}
+    setCommandMenu(match[1]==='/'?'mode':'skill');setCommandQuery(match[2].toLowerCase());setCommandIndex(0);
+  };
+  const selectCommand=(option:CommandOption)=>{
+    const match=text.match(/(?:^|\s)([/@])([a-zA-Z0-9-]*)$/);
+    let next=text;
+    if(match&&match.index!=null){const prefix=text.slice(0,match.index);const leading=match[0].match(/^\s/)?.[0]||'';next=(prefix+leading).replace(/[ \t]+$/,' ')}
+    if(commandMenu==='mode')setCommandMode(option.id);
+    if(commandMenu==='skill')setCommandSkills(xs=>xs.includes(option.id)?xs:[...xs,option.id].slice(0,4));
+    setText(next);setCommandMenu('');setCommandQuery('');setCommandIndex(0);window.setTimeout(()=>textareaRef.current?.focus(),0);
+  };
+  const handleComposerKeyDown=(e:React.KeyboardEvent<HTMLTextAreaElement>)=>{
+    if(commandMenu&&commandItems.length){
+      if(e.key==='ArrowDown'){e.preventDefault();setCommandIndex(i=>(i+1)%commandItems.length);return}
+      if(e.key==='ArrowUp'){e.preventDefault();setCommandIndex(i=>(i-1+commandItems.length)%commandItems.length);return}
+      if((e.key==='Enter'&&!e.shiftKey)||e.key==='Tab'){e.preventDefault();selectCommand(commandItems[Math.min(commandIndex,commandItems.length-1)]);return}
+      if(e.key==='Escape'){e.preventDefault();setCommandMenu('');return}
+    }
+    if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send()}
+  };
 
   const updateThinkingMode=(next:ThinkingMode)=>{
     setThinkingMode(next);
@@ -330,7 +372,7 @@ export default function Chat(){
     setCurrentRun(latest&&latest.status!=='completed'?latest:null);localStorage.setItem('daiki_current_session',d.session.id);
     setAttachments([]);if(!preserveComposer)setText('');if(closeHistory)window.dispatchEvent(new Event('daiki-close-navigation'));return true;
   };
-  const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setUploadError('');setEditingMessageId(null);setHistoryQuery('');setHistoryResults([]);localStorage.removeItem('daiki_current_session');window.dispatchEvent(new Event('daiki-close-navigation'))};
+  const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setCommandMode('');setCommandSkills([]);setCommandMenu('');setUploadError('');setEditingMessageId(null);setHistoryQuery('');setHistoryResults([]);localStorage.removeItem('daiki_current_session');window.dispatchEvent(new Event('daiki-close-navigation'))};
   const openSession=async(id:string,closeHistory=true)=>{setHistoryBusy(true);try{await loadSessionData(id,closeHistory,false)}finally{setHistoryBusy(false)}};
   const deleteSession=async(id:string)=>{if(id===sessionId&&runBlocking)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'DELETE'});if(r.ok){setHistoryResults(xs=>xs.filter(x=>x.id!==id));if(sessionId===id)newChat();await refreshSessions()}};
   const updateSessionInLists=(updated:ChatSession)=>{setSessions(xs=>xs.map(x=>x.id===updated.id?updated:x));setHistoryResults(xs=>xs.map(x=>x.id===updated.id?updated:x))};
@@ -345,8 +387,8 @@ export default function Chat(){
   };
   const updateSessionModel=async(next:string)=>{setModel(next);if(!sessionId)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(sessionId)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({modelAlias:next})});if(r.ok){const updated=await r.json() as ChatSession;setSessions(xs=>xs.map(x=>x.id===updated.id?updated:x))}};
   const saveSessionMessage=async(id:string,role:'user'|'assistant',content:string,attachmentIds:string[]=[])=>{const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({role,content,attachmentIds})});if(!r.ok)throw new Error('Could not save chat history');return await r.json() as StoredMessage};
-  const startRun=async(id:string)=>{
-    const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}/runs`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({researchMode,thinkingMode:effectiveThinkingMode})});const d=await r.json().catch(()=>({})) as ChatRun&{error?:string;run?:ChatRun};
+  const startRun=async(id:string,selectedCommandMode=commandMode,selectedCommandSkills=commandSkills)=>{
+    const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}/runs`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({researchMode,thinkingMode:effectiveThinkingMode,commandMode:selectedCommandMode,commandSkills:selectedCommandSkills})});const d=await r.json().catch(()=>({})) as ChatRun&{error?:string;run?:ChatRun};
     if(r.status===409&&d.run){setCurrentRun(d.run);return d.run}if(!r.ok)throw new Error(errorText(d.error)||'Could not start background run');setCurrentRun(d);return d;
   };
   const controlRun=async(action:'pause'|'resume')=>{if(!currentRun)return;setBusy(true);try{const r=await fetch(`/api/chat-runs/${encodeURIComponent(currentRun.id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({action})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||'Could not update run');setCurrentRun(d as ChatRun)}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setBusy(false)}};
@@ -354,21 +396,22 @@ export default function Chat(){
   const uploadFiles=async(files:FileList|File[],source:'file'|'image'|'folder')=>{if(attachmentRestricted||runBlocking||localBusy||(guest&&source==='folder'))return;const list=Array.from(files);if(!list.length)return;setAttachMenu(false);setUploadError('');setUploading(x=>x+list.length);try{const uploaded:Attachment[]=[];for(const f of list)uploaded.push(await uploadOne(f,source));setAttachments(x=>[...x,...uploaded])}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setUploading(x=>Math.max(0,x-list.length))}};
   const removeAttachment=async(a:Attachment)=>{setAttachments(x=>x.filter(v=>v.id!==a.id));void fetch(`${guest?'/api/guest/attachments':'/api/attachments'}/${encodeURIComponent(a.id)}`,{method:'DELETE',headers:guest?guestDeviceHeaders():undefined}).catch(()=>{})};
   const generateGuestAttachment=async(kind:'image'|'file')=>{const prompt=text.trim();if(!guest||!prompt)return;setAttachMenu(false);setUploadError('');setGuestGenerating(kind);try{const r=await fetch(`/api/guest/generate/${kind}`,{method:'POST',headers:{'content-type':'application/json',...guestDeviceHeaders()},body:JSON.stringify({prompt,name:kind==='file'?'generated.txt':'generated.png'})});const d=await r.json().catch(()=>({})) as {attachment?:Attachment;error?:unknown};if(!r.ok||!d.attachment)throw new Error(errorText(d.error)||`${kind} generation unavailable`);setAttachments(x=>[...x,d.attachment!])}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setGuestGenerating('')}};
-  const sendGuest=async(content:string,currentAttachments:Attachment[])=>{
-    const userMsg:Msg={role:'user',text:content,attachments:currentAttachments};const history=[...msgs,userMsg];setMsgs([...history,{role:'ai',text:''}]);setText('');setAttachments([]);
-    const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json',...guestDeviceHeaders()},body:JSON.stringify({model:'fast',researchMode:'off',thinkingMode:'off',attachmentIds:currentAttachments.map(a=>a.id),messages:history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),stream:true})});
+  const sendGuest=async(content:string,currentAttachments:Attachment[],selectedCommandMode:string,selectedCommandSkills:string[])=>{
+    const userMsg:Msg={role:'user',text:content,attachments:currentAttachments};const history=[...msgs,userMsg];setMsgs([...history,{role:'ai',text:''}]);setText('');setAttachments([]);setCommandMode('');setCommandSkills([]);setCommandMenu('');
+    const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json',...guestDeviceHeaders()},body:JSON.stringify({model:'fast',commandMode:selectedCommandMode,commandSkills:selectedCommandSkills,attachmentIds:currentAttachments.map(a=>a.id),messages:history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),stream:true})});
     if(!r.ok||!r.body){const d=await r.json().catch(()=>({error:'Gateway unavailable'}));const raw=errorText(d.error||d.detail)||'Gateway unavailable';throw new Error(friendlyGuestError(raw,d.retryAfterSeconds))}
+    const guestSources=decodeGuestResearchSources(r);if(guestSources.length)setMsgs(xs=>xs.map((m,i)=>i===xs.length-1?{...m,sources:guestSources}:m));
     const reader=r.body.getReader();const dec=new TextDecoder();let buf='';let answer='';
     while(true){const {done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';for(const raw of lines){const line=raw.trim();if(!line.startsWith('data:'))continue;const data=line.slice(5).trim();if(!data||data==='[DONE]')continue;const j=JSON.parse(data);if(j?.error)throw new Error(errorText(j.error));const chunk=j?.choices?.[0]?.delta?.content||'';if(chunk){answer+=chunk;setMsgs(xs=>xs.map((m,i)=>i===xs.length-1?{...m,text:answer}:m))}}}
     if(!answer)setMsgs(xs=>xs.map((m,i)=>i===xs.length-1?{...m,text:'I didn’t get a response back. Please try again.'}:m));
   };
   const send=async()=>{
     if(!accessReady||(!text.trim()&&!attachments.length)||busy||uploading>0||(!guest&&quotaBlocked))return;setBusy(true);setAttachMenu(false);setUploadError('');
-    const q=text.trim();const currentAttachments=[...attachments];const content=q||attachmentReviewPrompt(msgs);
+    const q=text.trim();const currentAttachments=[...attachments];const selectedCommandMode=commandMode;const selectedCommandSkills=[...commandSkills];const content=q||attachmentReviewPrompt(msgs);
     try{
-      if(guest){await sendGuest(content,currentAttachments);return}
+      if(guest){await sendGuest(content,currentAttachments,selectedCommandMode,selectedCommandSkills);return}
       const current=await ensureSession(content);const stored=await saveSessionMessage(current,'user',content,currentAttachments.map(a=>a.id));
-      setMsgs(old=>[...old,{id:stored.id,role:'user',text:stored.content,attachments:currentAttachments}]);setText('');setAttachments([]);await startRun(current);await refreshSessions();
+      setMsgs(old=>[...old,{id:stored.id,role:'user',text:stored.content,attachments:currentAttachments}]);setText('');setAttachments([]);setCommandMode('');setCommandSkills([]);setCommandMenu('');await startRun(current,selectedCommandMode,selectedCommandSkills);await refreshSessions();
     }catch(e){setMsgs(old=>{const last=old[old.length-1];const message=e instanceof Error?e.message:String(e);const display=guest?message:`I couldn’t connect: ${message}`;if(last?.role==='ai'&&!last.text)return old.map((m,i)=>i===old.length-1?{...m,text:display}:m);return [...old,{role:'ai',text:guest?message:`I couldn’t start the run: ${message}`}]})}finally{setBusy(false)}
   };
   const editAndRetry=async(message:Msg,content:string)=>{
@@ -421,11 +464,11 @@ export default function Chat(){
       </header>
 
       <div className="chatScroll" ref={scrollRef} onDragOver={e=>{if(!attachmentRestricted)e.preventDefault()}} onDrop={e=>{if(attachmentRestricted)return;e.preventDefault();void uploadFiles(e.dataTransfer.files,'file')}}>
-        {!msgs.length&&!currentRun?<div className="chatEmptyState"><div className="emptyMark">D</div><h1>What can I help with?</h1><p>{guest?'Chat through Hermes with Fast. Upload images/files and use limited generation; sign in for history, skills, tools, web research and more models.':'Ask anything, research the web, or drop in files and project folders.'}</p>{guest?<div className="guestPolicyStrip"><span>Fast only</span><span>{guestPolicy?`${guestPolicy.requestsPerHour}/hour`:'Strict rate limit'}</span><span>{guestPolicy?`${new Intl.NumberFormat().format(guestPolicy.tokenLimit)} tokens/${guestPolicy.intervalKind}`:'Limited quota'}</span>{guestPolicy?.allowUploads?<span>Uploads · {guestPolicy.maxUploadsPerHour}/hour</span>:null}{guestPolicy?.allowImageGeneration?<span>Images · {guestPolicy.imageGenerationsPerDay}/day</span>:null}{guestPolicy?.allowFileGeneration?<span>Files · {guestPolicy.fileGenerationsPerDay}/day</span>:null}</div>:null}<div className="promptStarters">{starters.filter(([label])=>!guest||label!=='Research').map(([label,prompt])=><button key={label} type="button" onClick={()=>setText(prompt)}><span>{label}</span><small>{prompt}</small></button>)}</div></div>:<div className="messageFeed">
-          {msgs.map((m,i)=>{const copyKey=`${m.role}-${m.id??i}`;const tokens=m.run?.activity?.tokens;const research=m.run?.activity?.research;const sources=research?.sources||[];const runThinking=m.run?.activity?.thinking;const thinkingModeLabel=runThinking?.mode||m.run?.thinkingMode||'off';const effectiveEffort=runThinking?.effectiveEffort;const reasoningTokens=tokens?.reasoning||0;return <div key={copyKey} className={`messageRow ${m.role}`}><div className="messageAvatar">{m.role==='ai'?'D':'You'}</div><div className="messageStack"><div className="bubble">{m.role==='user'&&editingMessageId===m.id?<div className="messageEditor"><textarea autoFocus value={editText} onChange={e=>setEditText(e.target.value)} rows={Math.min(8,Math.max(2,editText.split('\n').length))}/><div><button type="button" onClick={()=>{setEditingMessageId(null);setEditText('')}}>Cancel</button><button type="button" className="primary" onClick={()=>void editAndRetry(m,editText)}>Save & Retry</button></div></div>:<MessageContent message={m} sources={sources}/>}</div>
+        {!msgs.length&&!currentRun?<div className="chatEmptyState"><div className="emptyMark">D</div><h1>What can I help with?</h1><p>{guest?'Chat through Hermes with Fast. Type / for modes and @ for skills, including Deep Search and document/data skills; sign in for history, more models and full agent tools.':'Ask anything, research the web, or drop in files and project folders.'}</p>{guest?<div className="guestPolicyStrip"><span>Fast only</span><span>{guestPolicy?`${guestPolicy.requestsPerHour}/hour`:'Strict rate limit'}</span><span>{guestPolicy?`${new Intl.NumberFormat().format(guestPolicy.tokenLimit)} tokens/${guestPolicy.intervalKind}`:'Limited quota'}</span>{guestPolicy?.allowUploads?<span>Uploads · {guestPolicy.maxUploadsPerHour}/hour</span>:null}{guestPolicy?.allowImageGeneration?<span>Images · {guestPolicy.imageGenerationsPerDay}/day</span>:null}{guestPolicy?.allowFileGeneration?<span>Files · {guestPolicy.fileGenerationsPerDay}/day</span>:null}</div>:null}<div className="promptStarters">{starters.map(([label,prompt])=><button key={label} type="button" onClick={()=>setText(prompt)}><span>{label}</span><small>{prompt}</small></button>)}</div></div>:<div className="messageFeed">
+          {msgs.map((m,i)=>{const copyKey=`${m.role}-${m.id??i}`;const tokens=m.run?.activity?.tokens;const research=m.run?.activity?.research;const sources=m.sources||research?.sources||[];const runThinking=m.run?.activity?.thinking;const thinkingModeLabel=runThinking?.mode||m.run?.thinkingMode||'off';const effectiveEffort=runThinking?.effectiveEffort;const reasoningTokens=tokens?.reasoning||0;return <div key={copyKey} className={`messageRow ${m.role}`}><div className="messageAvatar">{m.role==='ai'?'D':'You'}</div><div className="messageStack"><div className="bubble">{m.role==='user'&&editingMessageId===m.id?<div className="messageEditor"><textarea autoFocus value={editText} onChange={e=>setEditText(e.target.value)} rows={Math.min(8,Math.max(2,editText.split('\n').length))}/><div><button type="button" onClick={()=>{setEditingMessageId(null);setEditText('')}}>Cancel</button><button type="button" className="primary" onClick={()=>void editAndRetry(m,editText)}>Save & Retry</button></div></div>:<MessageContent message={m} sources={sources}/>}</div>
             {m.text?<div className="messageActions"><button type="button" aria-label="Copy message" onClick={()=>void copyMessage(m.text,copyKey)}>{copiedKey===copyKey?<Check size={13}/>:<Copy size={13}/>}<span>{copiedKey===copyKey?'Copied':'Copy'}</span></button>{m.role==='user'&&m.id?<button type="button" disabled={busy} onClick={()=>{setEditingMessageId(m.id!);setEditText(m.text)}}><Pencil size={13}/><span>Edit</span></button>:null}{m.role==='ai'&&!guest?<button type="button" disabled={busy} onClick={()=>void retryFromAssistant(i)}><RotateCcw size={13}/><span>Retry</span></button>:null}</div>:null}
-            {m.role==='ai'&&(research?.used||m.run||tokens)?<div className="responseMetaBar">
-              {research?.used?<><ResearchSources sources={sources}/><span className="researchBadge"><Globe2 size={12}/>Web searched · {research.sources?.length||research.sourceCount||0}</span></>:null}
+            {m.role==='ai'&&(sources.length||research?.used||m.run||tokens)?<div className="responseMetaBar">
+              {research?.used||sources.length?<><ResearchSources sources={sources}/><span className="researchBadge"><Globe2 size={12}/>Web searched · {research?.sourceCount||sources.length}</span></>:null}
               {m.run&&thinkingModeLabel!=='off'?<span className="thinkingBadge"><Brain size={12}/>Thought · {thinkingModeLabel}{effectiveEffort&&effectiveEffort!==thinkingModeLabel?` → ${effectiveEffort}`:''}{m.run.activity?.durationMs!=null?` · ${(m.run.activity.durationMs/1000).toFixed(1)}s`:''}{reasoningTokens>0?` · ${fmtTokens(reasoningTokens)} reasoning`:''}</span>:null}
               {tokens?<span className="tokenUsageBadge">Tokens · {fmtTokens(tokens.total)}</span>:null}
               {m.run?<RunActivityDetails run={m.run}/>:null}
@@ -440,12 +483,14 @@ export default function Chat(){
         {resetGiftNotice?<div className="notice resetGiftNotice"><div><strong>Quota reset received</strong><span>{resetGiftNotice}</span></div><button type="button" className="btn compact ghost" onClick={()=>setResetGiftNotice('')}>Got it</button></div>:null}
         {quota?.mode==='limited'&&quotaBlocked?<div className="notice quotaNoticeExhausted quotaNotice"><div><strong>Token quota blocked</strong><span>{`Natural reset${quota.resetAt?` in ${resetRemainingLabel} (${new Date(quota.resetAt).toLocaleTimeString()})`:''}`}</span>{quotaLimitSummary?<small>{quotaLimitSummary}</small>:null}{resetsAvailable>0?<small>{resetsAvailable} reset{resetsAvailable===1?'':'s'} available{resetCredits?.nextExpiry?` · expires ${new Date(resetCredits.nextExpiry).toLocaleString()}`:''}</small>:null}</div>{resetsAvailable>0?<button type="button" className="btn compact primary" disabled={resetBusy} onClick={()=>void redeemQuotaReset()}>{resetBusy?'Resetting…':'Use 1 reset & retry'}</button>:null}</div>:null}
         <form className="composerBox" onSubmit={submit}>
+          {commandMode||commandSkills.length?<div className="commandSelectionTray">{selectedModeOption?<button type="button" className="commandChip mode" onClick={()=>setCommandMode('')} title="Remove mode"><b>/</b>{selectedModeOption.name}<X size={12}/></button>:null}{selectedSkillOptions.map(skill=><button type="button" className="commandChip skill" key={skill.id} onClick={()=>setCommandSkills(xs=>xs.filter(id=>id!==skill.id))} title={`Remove ${skill.name}`}><b>@</b>{skill.name}<X size={12}/></button>)}</div>:null}
+          {commandMenu&&commandItems.length?<div className="commandPalette" role="listbox" aria-label={commandMenu==='mode'?'Modes':'Skills'}><div className="commandPaletteHead"><strong>{commandMenu==='mode'?'Modes':'Skills'}</strong><span>{commandMenu==='mode'?'Choose how Daiki should work':'Choose up to 4 skills for this turn'}</span></div>{commandItems.map((item,index)=><button type="button" role="option" aria-selected={index===commandIndex} className={index===commandIndex?'active':''} key={item.id} onMouseDown={e=>e.preventDefault()} onClick={()=>selectCommand(item)}><code>{commandMenu==='mode'?'/':'@'}{item.id}</code><span><strong>{item.name}</strong><small>{item.description}</small></span>{guest&&item.guest?<em>Guest</em>:null}</button>)}</div>:null}
           {attachments.length||uploading?<div className="attachmentTray">{attachments.map(a=><div className="attachmentChip" key={a.id}><span className="attachmentIcon">{a.mediaType.startsWith('image/')?<ImageIcon size={16}/>:a.source==='folder'?<FolderOpen size={16}/>:<File size={16}/>}</span><div><strong>{a.name}</strong><small>{a.source==='folder'?a.relativePath:size(a.sizeBytes)} · {a.extractStatus}</small></div><button type="button" aria-label={`Remove ${a.name}`} onClick={()=>void removeAttachment(a)}><X size={14}/></button></div>)}{uploading?<div className="attachmentChip uploading"><span className="attachmentIcon"><Paperclip size={16}/></span><div><strong>Uploading…</strong><small>{uploading} file{uploading>1?'s':''}</small></div></div>:null}</div>:null}
           {uploadError?<div className="attachmentError">{uploadError}</div>:null}
-          <div className="composerRow"><div className="attachmentMenuWrap"><button className="attachBtn" type="button" aria-label="Add or generate attachment" disabled={attachmentRestricted||busy||Boolean(guestGenerating)} onClick={()=>setAttachMenu(x=>!x)}><Plus size={20}/></button>{attachMenu?<div className="attachmentMenu"><button type="button" onClick={()=>imageRef.current?.click()}><ImageIcon size={17}/><span><strong>Upload image</strong><small>PNG, JPEG, WebP and more</small></span></button><button type="button" onClick={()=>fileRef.current?.click()}><File size={17}/><span><strong>Upload file</strong><small>Text, code, data or documents</small></span></button>{!guest?<button type="button" onClick={()=>folderRef.current?.click()}><FolderOpen size={17}/><span><strong>Folder</strong><small>Upload a project directory</small></span></button>:null}{guest&&guestPolicy?.allowImageGeneration?<button type="button" disabled={!text.trim()||Boolean(guestGenerating)} onClick={()=>void generateGuestAttachment('image')}><ImageIcon size={17}/><span><strong>Generate image</strong><small>{guestPolicy.imageGenerationsPerDay}/day · uses current prompt</small></span></button>:null}{guest&&guestPolicy?.allowFileGeneration?<button type="button" disabled={!text.trim()||Boolean(guestGenerating)} onClick={()=>void generateGuestAttachment('file')}><File size={17}/><span><strong>Generate file</strong><small>{guestPolicy.fileGenerationsPerDay}/day · uses current prompt</small></span></button>:null}</div>:null}</div><textarea ref={textareaRef} className="chatInput" rows={1} value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send()}}} placeholder={guest?'Message Daiki Fast via Hermes…':pending?'Message Daiki…':'Message Daiki'}/><button className="sendBtn" aria-label="Send message" disabled={!accessReady||busy||uploading>0||Boolean(guestGenerating)||(!guest&&quotaBlocked)||(!text.trim()&&!attachments.length)} type="submit"><Send size={18}/></button></div>
+          <div className="composerRow"><div className="attachmentMenuWrap"><button className="attachBtn" type="button" aria-label="Add or generate attachment" disabled={attachmentRestricted||busy||Boolean(guestGenerating)} onClick={()=>{setCommandMenu('');setAttachMenu(x=>!x)}}><Plus size={20}/></button>{attachMenu?<div className="attachmentMenu"><button type="button" onClick={()=>imageRef.current?.click()}><ImageIcon size={17}/><span><strong>Upload image</strong><small>PNG, JPEG, WebP and more</small></span></button><button type="button" onClick={()=>fileRef.current?.click()}><File size={17}/><span><strong>Upload file</strong><small>Text, code, data or documents</small></span></button>{!guest?<button type="button" onClick={()=>folderRef.current?.click()}><FolderOpen size={17}/><span><strong>Folder</strong><small>Upload a project directory</small></span></button>:null}{guest&&guestPolicy?.allowImageGeneration?<button type="button" disabled={!text.trim()||Boolean(guestGenerating)} onClick={()=>void generateGuestAttachment('image')}><ImageIcon size={17}/><span><strong>Generate image</strong><small>{guestPolicy.imageGenerationsPerDay}/day · uses current prompt</small></span></button>:null}{guest&&guestPolicy?.allowFileGeneration?<button type="button" disabled={!text.trim()||Boolean(guestGenerating)} onClick={()=>void generateGuestAttachment('file')}><File size={17}/><span><strong>Generate file</strong><small>{guestPolicy.fileGenerationsPerDay}/day · uses current prompt</small></span></button>:null}</div>:null}</div><textarea ref={textareaRef} className="chatInput" rows={1} value={text} onChange={e=>updateComposerText(e.target.value)} onKeyDown={handleComposerKeyDown} placeholder={guest?'Message Daiki…  / modes  @ skills':pending?'Message Daiki…  / modes  @ skills':'Message Daiki…  / modes  @ skills'}/><button className="sendBtn" aria-label="Send message" disabled={!accessReady||busy||uploading>0||Boolean(guestGenerating)||(!guest&&quotaBlocked)||(!text.trim()&&!attachments.length)} type="submit"><Send size={18}/></button></div>
           <input ref={imageRef} hidden type="file" accept="image/*" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'image');e.currentTarget.value=''}}/><input ref={fileRef} hidden type="file" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'file');e.currentTarget.value=''}}/><input ref={folderRef} hidden type="file" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'folder');e.currentTarget.value=''}}/>
         </form>
-        <div className="composerHint">{guest?<><span>Guest chat is temporary · Fast via Hermes · uploads/generation are limited · </span><Link href="/login">Sign in for full access</Link></>:<>Daiki can make mistakes. Check important information.</>}</div>
+        <div className="composerHint">{guest?<><span>Guest chat is temporary · / modes · @ skills · quota applies · </span><Link href="/login">Sign in for full access</Link></>:<>Type / for modes · @ for skills · Daiki can make mistakes. Check important information.</>}</div>
       </div>
     </section>
   </div>;
