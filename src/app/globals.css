@@ -163,8 +163,10 @@
 /* Unified navigation: chat history and normal app navigation share one sidebar. */
 .chatShell{grid-template-columns:274px minmax(0,1fr)}
 .chatShell .appSidebar{padding:12px 10px}
-.chatShell .sidebarScroll{display:flex;flex-direction:column;min-height:0}
-.chatSidebarSlot{display:flex;flex:0 1 48%;min-height:220px;flex-direction:column;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--line)}
+.chatShell .sidebarScroll{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.sidebarNavSections{min-width:0}
+.chatShell .sidebarNavSections{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;scrollbar-width:thin;padding-right:2px}
+.chatSidebarSlot{display:flex;flex:0 1 clamp(240px,40dvh,410px);min-height:220px;max-height:410px;flex-direction:column;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--line)}
 .chatSidebarSlot .chatHistoryHead{flex:0 0 auto}
 .chatSidebarSlot .historySearch{flex:0 0 auto}
 .chatSidebarSlot .chatHistoryList{flex:1 1 auto;min-height:0;overflow:auto;margin:2px 0 6px}
@@ -177,12 +179,13 @@
   .chatShell{grid-template-columns:1fr}
   .chatShell .main:has(.chatPage){height:calc(100dvh - 56px - env(safe-area-inset-top))}
   .chatShell .appSidebar{padding:14px 12px 12px}
-  .chatSidebarSlot{flex-basis:auto;min-height:260px;max-height:48dvh}
-  .chatShell .appSidebar .sidebarScroll{overflow-y:auto}
+  .chatSidebarSlot{flex:0 1 clamp(250px,46dvh,390px);min-height:230px;max-height:390px}
+  .chatShell .appSidebar .sidebarScroll{overflow:hidden}
+  .chatShell .sidebarNavSections{min-height:150px}
   .chatShell .historyToggle{display:grid}
 }
 @media(max-width:620px){
-  .chatSidebarSlot{min-height:230px;max-height:44dvh}
+  .chatSidebarSlot{flex-basis:clamp(250px,48dvh,380px);min-height:220px;max-height:380px}
   .chatSidebarSlot .historySearch{margin-top:8px}
 }
 
@@ -266,7 +269,7 @@
 }
 
 /* Chat history v2: ChatGPT-like hierarchy with Daiki styling. */
-.chatSidebarSlot{flex:1 1 0;min-height:0;max-height:none;padding:0 0 8px;margin:0 0 8px;border-bottom:1px solid var(--line)}
+.chatSidebarSlot{flex:0 1 clamp(240px,40dvh,410px);min-height:220px;max-height:410px;padding:0 0 8px;margin:0 0 8px;border-bottom:1px solid var(--line)}
 .chatSidebarSlot .chatHistoryList{margin:4px 0 6px;padding:0 2px 4px 0;overflow-y:auto;overflow-x:visible}
 .chatHistoryHead{padding:0 1px}.newChatButton{height:38px;border-color:transparent;background:transparent;padding:0 9px;border-radius:9px}.newChatButton:hover{background:#ebe8e4}.newChatButton span{font-size:12px;font-weight:680}
 .historySearch{height:36px;margin:7px 1px 8px;padding:0 9px;border-color:transparent;background:#ece9e5;border-radius:9px}.historySearch input{font-size:12px}.historySearch kbd{flex:0 0 auto;border:0;background:transparent;color:#9c948d;font:600 9px/1 ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -285,7 +288,8 @@
   .chatShell .historyToggle{display:none!important}
   .chatShell .appSidebar{width:min(92vw,340px)}
   .chatShell .appSidebar .sidebarScroll{display:flex;overflow:hidden}
-  .chatShell .chatSidebarSlot{flex:1 1 0;min-height:180px;max-height:none}
+  .chatShell .chatSidebarSlot{flex:0 1 clamp(250px,46dvh,390px);min-height:220px;max-height:390px}
+  .chatShell .sidebarNavSections{flex:1 1 auto;min-height:150px;overflow-y:auto;overflow-x:hidden}
   .chatShell .chatTopbar{height:46px;min-height:46px;flex:0 0 46px;padding:5px 10px;gap:6px}
   .chatShell .chatTopbarTitle{min-width:0;flex:1 1 auto}.chatShell .chatTopbarTitle strong{max-width:min(34vw,220px)}
   .chatShell .chatTopbarControls{min-width:0;max-width:100%;gap:4px}
@@ -324,7 +328,7 @@
   .chatShell .tokenBudget>div{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 6px}.chatShell .tokenBudget i{opacity:.55}
   .chatShell .assistantSourcePanel{left:8px;right:8px;bottom:calc(78px + env(safe-area-inset-bottom));max-width:calc(100vw - 16px)}
   .chatShell .appSidebar{width:min(94vw,350px);padding-left:10px;padding-right:10px}
-  .chatShell .chatSidebarSlot{min-height:160px}.historySearch kbd{display:none}.historyGroupLabel{padding-left:9px}.chatSidebarSlot .historyItem{min-height:40px}.chatSidebarSlot .historyItem>button:first-child{height:40px}.chatSidebarSlot .historyItem>button:first-child strong{line-height:40px;font-size:13px}.historyMenu,.historyMenu>summary{width:38px;height:38px}.historyMenuPopover{right:2px;top:40px;width:156px}.historyMenuPopover button{height:38px;font-size:12px}
+  .chatShell .chatSidebarSlot{min-height:220px}.historySearch kbd{display:none}.historyGroupLabel{padding-left:9px}.chatSidebarSlot .historyItem{min-height:40px}.chatSidebarSlot .historyItem>button:first-child{height:40px}.chatSidebarSlot .historyItem>button:first-child strong{line-height:40px;font-size:13px}.historyMenu,.historyMenu>summary{width:38px;height:38px}.historyMenuPopover{right:2px;top:40px;width:156px}.historyMenuPopover button{height:38px;font-size:12px}
 }
 @media(max-width:390px){
   .chatShell .messageFeed{padding-left:10px;padding-right:10px}.chatShell .messageRow.user{padding-left:24px}
@@ -352,25 +356,26 @@
 .guestTrialCard{margin-top:18px;padding:14px;border:1px solid #e5ded7;border-radius:14px;background:#faf7f4;display:grid;gap:12px}.guestTrialCard>div{display:grid;gap:3px}.guestTrialCard strong{font-size:12px}.guestTrialCard span{color:var(--muted);font-size:10px;line-height:1.45}.guestTryBtn{width:100%;justify-content:center;background:var(--peach);color:var(--ink);border-color:#ead7cd}.guestTryBtn:hover{background:#f6ddd2}.guestUnlockBanner{flex:0 0 auto;margin:10px auto 0;width:min(820px,calc(100% - 28px));padding:10px 12px;border:1px solid #e8ded7;border-radius:13px;background:linear-gradient(90deg,#fff8f3,#faf8f6);display:flex;align-items:center;justify-content:space-between;gap:14px;z-index:3}.guestUnlockCopy{min-width:0;display:grid;gap:2px}.guestUnlockCopy strong{font-size:11px}.guestUnlockCopy span{color:#746d66;font-size:9px;line-height:1.45}.guestUnlockActions{display:flex;align-items:center;gap:6px;flex:0 0 auto}.guestUnlockActions .btn{white-space:nowrap}.chatPage:has(.guestUnlockBanner) .chatScroll{min-height:0}
 @media(max-width:620px){.guestTrialCard{padding:12px}.guestUnlockBanner{width:calc(100% - 16px);margin-top:7px;padding:9px 10px;align-items:flex-start}.guestUnlockCopy span{font-size:8px}.guestUnlockActions{display:grid;gap:4px}.guestUnlockActions .btn{min-height:32px;padding:4px 8px;font-size:9px}}
 
-/* Mobile chat history sizing: keep conversations usable instead of letting
-   Workspace/Admin navigation squeeze the history list down to a few rows. */
+/* Chat history sizing: history and app navigation own separate scroll regions.
+   This prevents a long Workspace/Admin menu from shrinking or overlapping New
+   chat, Search, conversation rows, or Smart Assist in the history area. */
 @media(max-width:900px){
   .chatShell .appSidebar .sidebarScroll{
     min-height:0;
-    overflow-y:auto;
+    overflow:hidden;
     overflow-x:hidden;
     overscroll-behavior-y:contain;
     -webkit-overflow-scrolling:touch;
   }
   .chatShell .chatSidebarSlot{
-    flex:0 0 auto;
-    height:clamp(430px,60dvh,620px);
-    min-height:430px;
-    max-height:none;
+    flex:0 1 clamp(250px,46dvh,390px);
+    height:auto;
+    min-height:220px;
+    max-height:390px;
   }
   .chatShell .chatSidebarSlot .chatHistoryList{
     flex:1 1 auto;
-    min-height:280px;
+    min-height:0;
     overflow-y:auto;
     overscroll-behavior-y:contain;
     -webkit-overflow-scrolling:touch;
@@ -380,20 +385,30 @@
     flex:0 0 auto;
     z-index:1;
   }
+  .chatShell .sidebarNavSections{
+    flex:1 1 auto;
+    min-height:150px;
+    overflow-y:auto;
+    overflow-x:hidden;
+    overscroll-behavior-y:contain;
+    -webkit-overflow-scrolling:touch;
+  }
 }
 @media(max-width:620px){
   .chatShell .chatSidebarSlot{
-    height:clamp(450px,64dvh,610px);
-    min-height:450px;
+    flex-basis:clamp(250px,48dvh,380px);
+    min-height:220px;
+    max-height:380px;
   }
-  .chatShell .chatSidebarSlot .chatHistoryList{min-height:310px}
+  .chatShell .sidebarNavSections{min-height:140px}
 }
 @media(max-height:700px) and (max-width:620px){
   .chatShell .chatSidebarSlot{
-    height:420px;
-    min-height:420px;
+    flex-basis:240px;
+    min-height:200px;
+    max-height:260px;
   }
-  .chatShell .chatSidebarSlot .chatHistoryList{min-height:280px}
+  .chatShell .sidebarNavSections{min-height:120px}
 }
 /* Token/resource quota controls */
 .resourceQuotaGrid{align-items:start}.resourceLimitField{min-width:0}.resourceLimitControl{display:grid;grid-template-columns:minmax(104px,.9fr) minmax(88px,1fr) auto;align-items:center;gap:6px}.resourceLimitControl>.input{min-width:0;width:100%}.resourceLimitControl>small{font-size:9px;color:var(--muted)}.resourceQuotaBox{border-color:#e8e2dc;background:#fcfbfa}.resourceQuotaBox>.sectionHead{align-items:flex-start}

@@ -47,8 +47,10 @@ export function AppShellClient({children,admin,adminNav,workspace,homeHref,name,
       </div>
       <div className="sidebarScroll">
         {inChat?<div id="chat-sidebar-slot" className="chatSidebarSlot"/>:null}
-        <div className="navGroup"><div className="navLabel">Workspace</div><nav className="nav">{workspace.map(x=><NavItem key={x.href} {...x}/>)}</nav></div>
-        {admin?<div className="navGroup"><div className="navLabel">Admin</div><nav className="nav">{adminNav.map(x=><NavItem key={x.href} {...x}/>)}</nav></div>:null}
+        <div className="sidebarNavSections">
+          <div className="navGroup"><div className="navLabel">Workspace</div><nav className="nav">{workspace.map(x=><NavItem key={x.href} {...x}/>)}</nav></div>
+          {admin?<div className="navGroup"><div className="navLabel">Admin</div><nav className="nav">{adminNav.map(x=><NavItem key={x.href} {...x}/>)}</nav></div>:null}
+        </div>
       </div>
       <div className="sidebarLocale"><LanguageSwitcher/></div>
       <div className="profile">
