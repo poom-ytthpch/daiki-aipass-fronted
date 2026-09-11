@@ -1,4 +1,4 @@
-export const DEFAULT_LOCALE='en' as const;
+export const DEFAULT_LOCALE='th' as const;
 export const LOCALE_COOKIE_KEY='daiki_locale';
 export const LOCALE_STORAGE_KEY='daiki_locale';
 
