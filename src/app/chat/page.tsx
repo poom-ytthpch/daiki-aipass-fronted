@@ -241,6 +241,7 @@ const friendlyGuestError=(code:string,retryAfterSeconds?:number)=>{
   if(normalized==='quota_exhausted')return thai?'โควตาโทเคนถูกใช้ครบแล้ว ระบบจะสร้างไฟล์ได้อีกครั้งเมื่อโควตารีเซ็ต':'Token quota has been exhausted. File generation will be available after the quota resets.';
   if(normalized==='route unavailable')return 'This attachment needs a vision route, but no compatible model is currently available.';
   if(normalized==='load failed'||normalized.includes('load failed'))return 'Daiki could not load this attachment for analysis. Please retry this message.';
+  if(normalized.includes('fresh google research unavailable'))return thai?'Google Search ยังไม่สามารถคืนหลักฐานที่ตรวจสอบได้ ระบบจึงหยุดคำตอบแทนการเดาข้อมูลเก่า กรุณาลองใหม่อีกครั้ง':'Google Search did not return verifiable evidence, so Daiki stopped instead of guessing from stale model knowledge. Please retry.';
   if(normalized.includes('attachment'))return code;
   if(normalized.includes('unavailable'))return 'Daiki is temporarily unavailable. Please try this message again.';
   return code||'Gateway unavailable';
@@ -253,6 +254,7 @@ const friendlyRunError=(value?:string)=>{
   if(lower.includes('hermes unavailable'))return 'The agent runtime was temporarily unavailable. Retry to continue from this chat.';
   if(lower.includes('rate')&&lower.includes('limit'))return 'The selected model is temporarily rate limited. Daiki will retry or use the configured fallback when possible.';
   if(lower.includes('authentication')||lower.includes('user not found'))return 'The selected provider rejected authentication. Daiki will use the configured fallback when available.';
+  if(lower.includes('fresh google research unavailable'))return 'Google Search did not return verifiable evidence. Daiki stopped this research turn instead of answering from stale model knowledge; retry to search again.';
   if(lower.includes('api call failed')||lower.includes('apiconnectionerror'))return 'The model provider rejected this turn before an answer was produced. Retry to continue.';
   if(raw.length>180)return 'The run stopped before completion. Open technical details below for the provider error, then retry to continue.';
   return raw;
@@ -269,6 +271,12 @@ function sourceHost(value?:string){
   try{return new URL(value).hostname.replace(/^www\./,'')}catch{return ''}
 }
 
+function sourceEngineLabel(value?:string){
+  const engine=(value||'').toLowerCase();
+  if(engine.includes('google'))return 'Google Search';
+  if(engine==='direct')return 'Direct URL';
+  return value||'Web source';
+}
 function sourceAuthorityLabel(value?:string){
   switch(value){
     case 'primary':return 'Primary';
@@ -293,7 +301,7 @@ function ResearchSources({sources}:{sources:RunSource[]}){
   if(!sources.length)return null;
   return <details className="assistantSources">
     <summary aria-label={`Open ${sources.length} research source${sources.length===1?'':'s'}`}><Globe2 size={12}/><strong>Sources</strong><span>{sources.length}</span><i className="sourceDomainPreview">{sources.slice(0,2).map((source,i)=><b key={`${source.url||i}`}>{sourceHost(source.url).slice(0,1).toUpperCase()||String(i+1)}</b>)}</i></summary>
-    <div className="assistantSourcePanel"><div className="assistantSourcePanelHead"><div><strong>Sources</strong><small>Web, primary, government and public social evidence used for this answer</small></div><span>{sources.length}</span></div><div className="assistantSourceList">{sources.slice(0,8).map((source,i)=><a key={`${source.url||source.title||i}`} href={source.url||'#'} target="_blank" rel="noreferrer"><b>{source.index||i+1}</b><span><strong>{source.title||sourceHost(source.url)||`Source ${i+1}`}</strong><span className="sourceMeta"><small>{sourceHost(source.url)||source.engine||'Web source'}</small>{source.region==='TH'?<em>Thailand</em>:null}{sourceAuthorityLabel(source.authority)?<em>{sourceAuthorityLabel(source.authority)}</em>:null}{source.qualityScore!=null?<em>Q {source.qualityScore}</em>:null}{source.sourceType==='social'?<em className="social">{source.platform||'Social'}</em>:null}</span></span></a>)}</div></div>
+    <div className="assistantSourcePanel"><div className="assistantSourcePanelHead"><div><strong>Sources</strong><small>Google Search, direct URLs, primary/government sources and public social evidence used for this answer</small></div><span>{sources.length}</span></div><div className="assistantSourceList">{sources.slice(0,8).map((source,i)=><a key={`${source.url||source.title||i}`} href={source.url||'#'} target="_blank" rel="noreferrer"><b>{source.index||i+1}</b><span><strong>{source.title||sourceHost(source.url)||`Source ${i+1}`}</strong><span className="sourceMeta"><small>{sourceHost(source.url)||sourceEngineLabel(source.engine)}</small>{source.region==='TH'?<em>Thailand</em>:null}{sourceAuthorityLabel(source.authority)?<em>{sourceAuthorityLabel(source.authority)}</em>:null}{source.qualityScore!=null?<em>Q {source.qualityScore}</em>:null}{source.sourceType==='social'?<em className="social">{source.platform||'Social'}</em>:null}</span></span></a>)}</div></div>
   </details>;
 }
 
@@ -312,7 +320,7 @@ function RunActivityDetails({run}:{run:ChatRun}){
     <div className="runActivityBody">
       {run.commandMode==='deep-search'||research?.depth==='deep'?<DeepResearchProgress run={run}/>:null}
       <div className="activityFacts"><div><span>Status</span><strong>{label}</strong></div><div><span>Thinking</span><strong>{thinking?.mode||run.thinkingMode}</strong></div>{activity.durationMs!=null?<div><span>Duration</span><strong>{(activity.durationMs/1000).toFixed(1)}s</strong></div>:null}</div>
-      <section><strong>Web research</strong>{research?.query?<p>Query: <code>{research.query}</code>{research.region?` · Region ${research.region}`:''}{research.scope?` · ${research.scope}`:''}</p>:<p>{research?.mode==='off'?'Web research disabled.':run.status==='running'||run.status==='queued'?'Research is evaluated by the backend while this run continues.':'No web query was required for this answer.'}</p>}{research?.error?<p className="activityError">{research.error}</p>:null}{sources.length?<div className="activitySources">{sources.map((source,i)=><a key={`${source.url||i}`} href={source.url||'#'} target="_blank" rel="noreferrer"><span>{source.title||source.url||`Source ${i+1}`}</span>{source.snippet?<small>{source.snippet}</small>:null}<em>{[source.region==='TH'?'TH':'',sourceAuthorityLabel(source.authority),source.qualityScore!=null?`Q ${source.qualityScore}`:'',source.sourceType==='social'?(source.platform||'Social'):'',source.engine||'web'].filter(Boolean).join(' · ')}</em></a>)}</div>:null}</section>
+      <section><strong>Google research</strong>{research?.query?<p>Query: <code>{research.query}</code>{research.region?` · Region ${research.region}`:''}{research.scope?` · ${research.scope}`:''}</p>:<p>{research?.mode==='off'?'Web research disabled.':run.status==='running'||run.status==='queued'?'Research is evaluated by the backend while this run continues.':'No web query was required for this answer.'}</p>}{research?.error?<p className="activityError">{research.error}</p>:null}{sources.length?<div className="activitySources">{sources.map((source,i)=><a key={`${source.url||i}`} href={source.url||'#'} target="_blank" rel="noreferrer"><span>{source.title||source.url||`Source ${i+1}`}</span>{source.snippet?<small>{source.snippet}</small>:null}<em>{[source.region==='TH'?'TH':'',sourceAuthorityLabel(source.authority),source.qualityScore!=null?`Q ${source.qualityScore}`:'',source.sourceType==='social'?(source.platform||'Social'):'',sourceEngineLabel(source.engine)].filter(Boolean).join(' · ')}</em></a>)}</div>:null}</section>
       <section><strong>Thinking</strong><p>Mode: {thinking?.mode||run.thinkingMode}{thinking?.effectiveEffort?` · native effort ${thinking.effectiveEffort}`:''}{thinking?.model?` · ${thinking.model}`:''}{thinking?.nativeReasoning===false&&thinking?.mode!=='off'?' · prompt-guided fallback':''}. Private chain-of-thought is not exposed.</p>{tokens?<p>{fmtTokens(tokens.reasoning)} actual reasoning tokens reported by the provider.</p>:null}</section>
       {tokens?<section><strong>Token usage</strong><p>{fmtTokens(tokens.input)} input · {fmtTokens(tokens.reasoning)} thinking · {fmtTokens(tokens.answer)} answer · {fmtTokens(tokens.total)} total</p></section>:null}
       {run.error?<section><strong>Error</strong>{run.error==='quota_exhausted'?<p className="activityError">{`Token quota used up${activity.quota?.resetAt?` · resets ${new Date(activity.quota.resetAt).toLocaleString()}`:''}. This run is saved and auto-continues when quota allows.`}</p>:run.error==='pending_chat_rate_limited'?<p className="activityError">{`Rate limit reached · this run is saved and auto-continues after ${activity.retryAfterSeconds||20}s.`}</p>:<div className="runErrorSummary"><strong>{friendlyRunError(run.error)}</strong><span>Your chat and sources are preserved. Use Retry/Play to continue after the runtime recovers.</span><details className="runErrorTechnical"><summary>Technical details</summary><code>{run.error}</code></details></div>}</section>:null}
