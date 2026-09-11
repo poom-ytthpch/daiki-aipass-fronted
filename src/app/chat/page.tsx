@@ -9,13 +9,13 @@ import remarkGfm from 'remark-gfm';
 
 type Attachment={id:string;name:string;relativePath:string;source:'file'|'image'|'folder'|'generated-file'|'generated-image';mediaType:string;sizeBytes:number;extractStatus:string;createdAt:string};
 type TokenUsage={input:number;reasoning:number;answer:number;total:number};
-type RunSource={index?:number;title?:string;url?:string;engine?:string;snippet?:string};
+type RunSource={index?:number;title?:string;url?:string;engine?:string;snippet?:string;region?:string;authority?:string;sourceType?:string;platform?:string};
 type ResetGrant={id:number;remainingResets:number;totalResets?:number;expiresAt:string;createdAt?:string;note?:string};
 type ResetCredits={available:number;nextExpiry?:string;lastResetAt?:string;grants?:ResetGrant[]};
 type QuotaLimitState={id:string;primary?:boolean;limit:number;used:number;remaining:number;resetAt?:string;interval:string;intervalCount?:number;windowStart?:string};
 type QuotaState={mode?:string;limit?:number;used?:number;remaining?:number;resetAt?:string;interval?:string;intervalCount?:number;windowStart?:string;blocked?:boolean;blockingLimitId?:string;limits?:QuotaLimitState[];resetCredits?:ResetCredits};
 type UsageResponse={usage?:{inputTokens?:number;outputTokens?:number;totalTokens?:number};quota?:QuotaState};
-type RunActivity={phase?:string;durationMs?:number;requestId?:string;httpStatus?:number;retryAfterSeconds?:number;quota?:QuotaState;research?:{mode?:string;query?:string;used?:boolean;error?:string;sourceCount?:number;sources?:RunSource[]};thinking?:{mode?:string;reasoningBudget?:number;requestedEffort?:string;effectiveEffort?:string;nativeReasoning?:boolean;model?:string;estimate?:unknown};tokens?:TokenUsage};
+type RunActivity={phase?:string;durationMs?:number;requestId?:string;httpStatus?:number;retryAfterSeconds?:number;quota?:QuotaState;research?:{mode?:string;query?:string;resolvedQuery?:string;used?:boolean;error?:string;sourceCount?:number;sources?:RunSource[];region?:string;locale?:string;scope?:string;depth?:string;focus?:string;phase?:string;queries?:string[];localSourceCount?:number;globalSourceCount?:number;socialSourceCount?:number;socialPlatforms?:string[]};thinking?:{mode?:string;reasoningBudget?:number;requestedEffort?:string;effectiveEffort?:string;nativeReasoning?:boolean;model?:string;estimate?:unknown};tokens?:TokenUsage};
 type ChatRun={id:string;sessionId:string;status:'queued'|'running'|'paused'|'completed'|'failed'|'cancelled';researchMode:string;thinkingMode:string;commandMode?:string;commandSkills?:string[];requestId?:string;content:string;error?:string;activity?:RunActivity;createdAt:string;startedAt?:string;completedAt?:string;updatedAt:string};
 type Msg={id?:number;role:'user'|'ai';text:string;progress?:string;attachments?:Attachment[];sources?:RunSource[];runId?:string;run?:ChatRun};
 type ChatSession={id:string;title:string;modelAlias:string;pinnedAt?:string;createdAt:string;updatedAt:string};
@@ -30,10 +30,47 @@ type CommandCatalog={modes:CommandOption[];skills:CommandOption[]};
 type CapabilityInfo={mode:string;maxToolRounds:number;skills:{id:string;name:string;description:string}[];tools:{id:string;name:string;description:string}[];commands?:CommandCatalog};
 type GuestHistoryEntry={role:'user'|'ai';text:string};
 type GuestAutoContinueReason='guest_rate_limited'|'guest_quota_exhausted'|'provider_rate_limited'|'transport_retry';
-type PendingGuestTurn={id:string;history:GuestHistoryEntry[];attachments:Attachment[];commandMode:string;commandSkills:string[];reason:GuestAutoContinueReason;retryAt:number;attempts:number;createdAt:number};
+type DeepSearchScope='local-first'|'local-only'|'global';
+type ResearchPrefs={region:string;locale:string;scope:DeepSearchScope;depth:'standard'|'deep';focus:string};
+type DeepSearchEvidence='balanced'|'official'|'social';
+type DeepSearchWizardState={step:number;prefs:ResearchPrefs;prompt:string;evidence:DeepSearchEvidence};
+type PendingGuestTurn={id:string;history:GuestHistoryEntry[];attachments:Attachment[];commandMode:string;commandSkills:string[];research:ResearchPrefs;reason:GuestAutoContinueReason;retryAt:number;attempts:number;createdAt:number};
 type GuestQuotaError={error?:unknown;detail?:unknown;retryAfterSeconds?:number;quota?:QuotaState};
 const AUTO_CONTINUE_POLL_MS=20_000;
 const PENDING_GUEST_TURN_KEY='daiki_guest_pending_turn_v1';
+const browserResearchPrefs=(depth:'standard'|'deep'='standard'):ResearchPrefs=>{
+  if(typeof window==='undefined')return {region:'GLOBAL',locale:'en',scope:'global',depth,focus:''};
+  const locale=(navigator.language||'en').slice(0,32);
+  let timezone='';try{timezone=Intl.DateTimeFormat().resolvedOptions().timeZone||''}catch{}
+  const thailand=timezone==='Asia/Bangkok'||locale.toLowerCase().startsWith('th');
+  return {region:thailand?'TH':'GLOBAL',locale,scope:thailand?'local-first':'global',depth,focus:''};
+};
+const deepSearchFocusOptions=(prompt:string)=>{
+  const thai=prefersThai(prompt);
+  return thai?[
+    {id:'decision',label:'ข้อมูลสำคัญสำหรับตัดสินใจ',detail:'เน้นข้อเท็จจริงล่าสุด ราคา ความพร้อมใช้ และประเด็นที่มีผลต่อการตัดสินใจ',focus:'ข้อมูลล่าสุดที่สำคัญต่อการตัดสินใจ ราคา ความพร้อมใช้ และข้อจำกัด'},
+    {id:'technical',label:'สเปก สมรรถนะ และเทคโนโลยี',detail:'เจาะรายละเอียดทางเทคนิค ความสามารถ ข้อจำกัด และเอกสารจากผู้ผลิต',focus:'สเปก สมรรถนะ เทคโนโลยี ข้อจำกัด และข้อมูลทางเทคนิคจากแหล่งทางการ'},
+    {id:'market',label:'ราคา รุ่นย่อย โปรโมชั่น และข้อมูลในไทย',detail:'เน้นตลาดไทย ตัวแทนจำหน่าย การรับประกัน ศูนย์บริการ และโปรโมชันล่าสุด',focus:'ราคา รุ่นย่อย โปรโมชั่น ตัวแทนจำหน่าย การรับประกัน ศูนย์บริการ และตลาดประเทศไทย'},
+    {id:'compare',label:'เปรียบเทียบตัวเลือกและคู่แข่ง',detail:'เทียบข้อดีข้อเสีย ความคุ้มค่า และตัวเลือกที่ใกล้เคียงกัน',focus:'เปรียบเทียบคู่แข่ง ข้อดีข้อเสีย ความคุ้มค่า และทางเลือกที่ใกล้เคียง'},
+  ]:[
+    {id:'decision',label:'Decision-relevant facts',detail:'Prioritize current facts, pricing, availability and constraints that affect a decision.',focus:'current decision-relevant facts, price, availability and constraints'},
+    {id:'technical',label:'Specs, performance and technology',detail:'Go deeper on technical capabilities, limitations and first-party documentation.',focus:'technical specifications, performance, technology, limitations and official documentation'},
+    {id:'market',label:'Local market, pricing and availability',detail:'Prioritize local variants, dealers, warranty, service and promotions.',focus:'local market pricing, variants, promotions, dealers, warranty and service'},
+    {id:'compare',label:'Competitors and alternatives',detail:'Compare strengths, weaknesses, value and close alternatives.',focus:'competitor comparison, strengths, weaknesses, value and alternatives'},
+  ];
+};
+const deepSearchEvidenceOptions=(prompt:string):Array<{id:DeepSearchEvidence;label:string;detail:string;focus:string}>=>{
+  const thai=prefersThai(prompt);
+  return thai?[
+    {id:'balanced',label:'สมดุลทุกแหล่งข้อมูล',detail:'ใช้แหล่งทางการ ข่าว/เว็บอิสระ และ Social เพื่อ cross-check กัน',focus:'ให้น้ำหนักสมดุลระหว่างแหล่งทางการ แหล่งอิสระ และข้อมูลสาธารณะจาก social/community พร้อม cross-check ข้อเท็จจริงสำคัญ'},
+    {id:'official',label:'เน้นแหล่งทางการและข้อมูลยืนยันได้',detail:'ใช้ Social เพื่อหา pain point/กระแส แต่ข้อเท็จจริงหลักต้องยืนยันจากแหล่งทางการหรือหลายแหล่ง',focus:'ให้ความสำคัญกับแหล่งทางการและ primary source เป็นหลัก ใช้ social เพื่อค้นหาประเด็นและประสบการณ์ผู้ใช้เท่านั้น และยืนยันข้อเท็จจริงสำคัญจากแหล่งที่เชื่อถือได้'},
+    {id:'social',label:'เน้นเสียงผู้ใช้จริงและ Social',detail:'ค้น Facebook, Instagram, TikTok, YouTube, Reddit, Pantip, X และ Threads มากขึ้น แล้วตรวจสอบข้อเท็จจริงกับแหล่งทางการ',focus:'เน้น public social/community และประสบการณ์ผู้ใช้จริงจาก Facebook Instagram TikTok YouTube Reddit Pantip X Threads พร้อมจัดกลุ่มประเด็นที่เกิดซ้ำ และ corroborate hard facts ด้วยแหล่งทางการ'},
+  ]:[
+    {id:'balanced',label:'Balanced evidence',detail:'Blend official sources, independent web sources and public social evidence, then cross-check them.',focus:'balance official sources, independent web sources and public social/community evidence, cross-checking important claims'},
+    {id:'official',label:'Official & verified first',detail:'Use social to discover issues and sentiment, but verify core facts with primary or independent sources.',focus:'prioritize official and primary sources; use social for issue discovery and user experience, while verifying important claims independently'},
+    {id:'social',label:'User voices & social first',detail:'Search Facebook, Instagram, TikTok, YouTube, Reddit, X, Threads and local communities more deeply, then verify hard facts.',focus:'prioritize public social/community user experiences and recurring themes across Facebook Instagram TikTok YouTube Reddit X Threads, while corroborating hard facts with official sources'},
+  ];
+};
 const isGuestAutoContinueReason=(value:string):value is GuestAutoContinueReason=>value==='guest_rate_limited'||value==='guest_quota_exhausted'||value==='provider_rate_limited'||value==='transport_retry';
 const retryableRunError=(run?:ChatRun|null)=>Boolean(run?.status==='failed'&&(run.error==='quota_exhausted'||run.error==='pending_chat_rate_limited'));
 const runAutoContinueAt=(run?:ChatRun|null)=>{
@@ -159,6 +196,19 @@ const guestProgressLabel=(turn:PendingGuestTurn,stage:'analyzing'|'generating')=
 const runProgressLabel=(run:ChatRun,messages:Msg[])=>{
   const latest=[...messages].reverse().find(m=>m.role==='user');
   const thai=prefersThai(latest?.text||'');
+  const research=run.activity?.research;
+  const phase=research?.phase||'';
+  if(run.commandMode==='deep-search'||research?.depth==='deep'){
+    if(phase==='planning'||run.status==='queued')return thai?'กำลังวางแผนการค้นคว้า…':'Planning the research…';
+    if(phase==='searching-local')return thai?'กำลังค้นหาแหล่งข้อมูลในประเทศไทยก่อน…':'Searching local sources first…';
+    if(phase==='searching-social-local')return thai?'กำลังค้นหา Facebook, Instagram, TikTok และ Social ในไทย…':'Searching Thailand-relevant Facebook, Instagram, TikTok and social sources…';
+    if(phase==='searching-global')return thai?'กำลังขยายการค้นหาไปยังแหล่งข้อมูลสากล…':'Expanding the search globally…';
+    if(phase==='searching-social-global')return thai?'กำลังขยายไปยัง Social และชุมชนผู้ใช้ทั่วโลก…':'Expanding into global social and community sources…';
+    if(phase==='reading-sources')return thai?'กำลังอ่านแหล่งข้อมูลที่เกี่ยวข้อง…':'Reading the most relevant sources…';
+    if(phase==='verifying-sources')return thai?'กำลังตรวจสอบและเทียบข้อมูลหลายแหล่ง…':'Cross-checking sources and claims…';
+    if(phase==='synthesizing')return thai?'กำลังสร้างรายงานการค้นคว้า…':'Building the research report…';
+    if(phase==='failed')return thai?'การค้นคว้าพบปัญหา กำลังเตรียมคำตอบที่มีข้อมูลเท่าที่ตรวจสอบได้…':'Research hit a problem; preparing the best verified answer available…';
+  }
   if(run.status==='queued')return thai?'กำลังเข้าคิวประมวลผล…':'Queued for processing…';
   if(latest?.attachments?.some(a=>a.mediaType.startsWith('image/')))return thai?'กำลังอ่านรูปภาพและวิเคราะห์…':'Reading the image and analyzing…';
   if(latest?.attachments?.length)return thai?'กำลังอ่านไฟล์และวิเคราะห์…':'Reading the attachment and analyzing…';
@@ -232,7 +282,7 @@ function ResearchSources({sources}:{sources:RunSource[]}){
   if(!sources.length)return null;
   return <details className="assistantSources">
     <summary aria-label={`Open ${sources.length} research source${sources.length===1?'':'s'}`}><Globe2 size={12}/><strong>Sources</strong><span>{sources.length}</span><i className="sourceDomainPreview">{sources.slice(0,2).map((source,i)=><b key={`${source.url||i}`}>{sourceHost(source.url).slice(0,1).toUpperCase()||String(i+1)}</b>)}</i></summary>
-    <div className="assistantSourcePanel"><div className="assistantSourcePanelHead"><div><strong>Sources</strong><small>References used for this answer</small></div><span>{sources.length}</span></div><div className="assistantSourceList">{sources.slice(0,8).map((source,i)=><a key={`${source.url||source.title||i}`} href={source.url||'#'} target="_blank" rel="noreferrer"><b>{source.index||i+1}</b><span><strong>{source.title||sourceHost(source.url)||`Source ${i+1}`}</strong><small>{sourceHost(source.url)||source.engine||'Web source'}</small></span></a>)}</div></div>
+    <div className="assistantSourcePanel"><div className="assistantSourcePanelHead"><div><strong>Sources</strong><small>Web, official and public social evidence used for this answer</small></div><span>{sources.length}</span></div><div className="assistantSourceList">{sources.slice(0,8).map((source,i)=><a key={`${source.url||source.title||i}`} href={source.url||'#'} target="_blank" rel="noreferrer"><b>{source.index||i+1}</b><span><strong>{source.title||sourceHost(source.url)||`Source ${i+1}`}</strong><span className="sourceMeta"><small>{sourceHost(source.url)||source.engine||'Web source'}</small>{source.region==='TH'?<em>Thailand</em>:null}{source.authority==='official'?<em>Official</em>:source.authority==='academic'?<em>Academic</em>:null}{source.sourceType==='social'?<em className="social">{source.platform||'Social'}</em>:null}</span></span></a>)}</div></div>
   </details>;
 }
 
@@ -247,16 +297,46 @@ function RunActivityDetails({run}:{run:ChatRun}){
   const activity=run.activity||{};const research=activity.research;const thinking=activity.thinking;const tokens=activity.tokens;const sources=research?.sources||[];
   const label=run.status==='running'?'Working':run.status==='queued'?'Queued':run.status==='paused'?'Paused':run.status==='failed'?'Failed':run.status==='cancelled'?'Stopped':'Completed';
   return <details className={`runActivity ${run.status}`} open={run.status==='failed'}>
-    <summary><span><Brain size={12}/>{label}</span><small>{research?.used?`Web · ${sources.length||research.sourceCount||0} sources`:`Web: ${research?.mode||run.researchMode}`} · Think: {thinking?.mode||run.thinkingMode}</small></summary>
+    <summary><span><Brain size={12}/>{label}</span><small>{run.commandMode==='deep-search'||research?.depth==='deep'?`Deep Search · ${sources.length||research?.sourceCount||0} sources${research?.socialSourceCount?` · ${research.socialSourceCount} social`:''}`:research?.used?`Web · ${sources.length||research.sourceCount||0} sources`:`Web: ${research?.mode||run.researchMode}`} · Think: {thinking?.mode||run.thinkingMode}</small></summary>
     <div className="runActivityBody">
+      {run.commandMode==='deep-search'||research?.depth==='deep'?<DeepResearchProgress run={run}/>:null}
       <div className="activityFacts"><div><span>Status</span><strong>{label}</strong></div><div><span>Thinking</span><strong>{thinking?.mode||run.thinkingMode}</strong></div>{activity.durationMs!=null?<div><span>Duration</span><strong>{(activity.durationMs/1000).toFixed(1)}s</strong></div>:null}</div>
-      <section><strong>Web research</strong>{research?.query?<p>Query: <code>{research.query}</code></p>:<p>{research?.mode==='off'?'Web research disabled.':run.status==='running'||run.status==='queued'?'Research is evaluated by the backend while this run continues.':'No web query was required for this answer.'}</p>}{research?.error?<p className="activityError">{research.error}</p>:null}{sources.length?<div className="activitySources">{sources.map((source,i)=><a key={`${source.url||i}`} href={source.url||'#'} target="_blank" rel="noreferrer"><span>{source.title||source.url||`Source ${i+1}`}</span>{source.snippet?<small>{source.snippet}</small>:null}<em>{source.engine||'web'}</em></a>)}</div>:null}</section>
+      <section><strong>Web research</strong>{research?.query?<p>Query: <code>{research.query}</code>{research.region?` · Region ${research.region}`:''}{research.scope?` · ${research.scope}`:''}</p>:<p>{research?.mode==='off'?'Web research disabled.':run.status==='running'||run.status==='queued'?'Research is evaluated by the backend while this run continues.':'No web query was required for this answer.'}</p>}{research?.error?<p className="activityError">{research.error}</p>:null}{sources.length?<div className="activitySources">{sources.map((source,i)=><a key={`${source.url||i}`} href={source.url||'#'} target="_blank" rel="noreferrer"><span>{source.title||source.url||`Source ${i+1}`}</span>{source.snippet?<small>{source.snippet}</small>:null}<em>{[source.region==='TH'?'TH':'',source.authority==='official'?'Official':'',source.sourceType==='social'?(source.platform||'Social'):'',source.engine||'web'].filter(Boolean).join(' · ')}</em></a>)}</div>:null}</section>
       <section><strong>Thinking</strong><p>Mode: {thinking?.mode||run.thinkingMode}{thinking?.effectiveEffort?` · native effort ${thinking.effectiveEffort}`:''}{thinking?.model?` · ${thinking.model}`:''}{thinking?.nativeReasoning===false&&thinking?.mode!=='off'?' · prompt-guided fallback':''}. Private chain-of-thought is not exposed.</p>{tokens?<p>{fmtTokens(tokens.reasoning)} actual reasoning tokens reported by the provider.</p>:null}</section>
       {tokens?<section><strong>Token usage</strong><p>{fmtTokens(tokens.input)} input · {fmtTokens(tokens.reasoning)} thinking · {fmtTokens(tokens.answer)} answer · {fmtTokens(tokens.total)} total</p></section>:null}
       {run.error?<section><strong>Error</strong>{run.error==='quota_exhausted'?<p className="activityError">{`Token quota used up${activity.quota?.resetAt?` · resets ${new Date(activity.quota.resetAt).toLocaleString()}`:''}. This run is saved and auto-continues when quota allows.`}</p>:run.error==='pending_chat_rate_limited'?<p className="activityError">{`Rate limit reached · this run is saved and auto-continues after ${activity.retryAfterSeconds||20}s.`}</p>:<div className="runErrorSummary"><strong>{friendlyRunError(run.error)}</strong><span>Your chat and sources are preserved. Use Retry/Play to continue after the runtime recovers.</span><details className="runErrorTechnical"><summary>Technical details</summary><code>{run.error}</code></details></div>}</section>:null}
       {activity.requestId||run.requestId?<small className="activityRequestId">Request {activity.requestId||run.requestId}</small>:null}
     </div>
   </details>;
+}
+
+function DeepResearchProgress({run}:{run:ChatRun}){
+  const research=run.activity?.research;
+  if(run.commandMode!=='deep-search'&&research?.depth!=='deep')return null;
+  const thai=prefersThai(research?.query||'');
+  const phase=research?.phase||(run.status==='completed'?'completed':'planning');
+  const steps:Array<{id:string;label:string}>=[];
+  steps.push({id:'planning',label:thai?'วางแผนคำค้นและหัวข้อย่อย':'Plan queries and research facets'});
+  if(research?.region==='TH'&&research?.scope!=='global'){
+    steps.push({id:'searching-local',label:thai?'ค้นหาแหล่งข้อมูลในประเทศไทยก่อน':'Search Thailand-relevant sources first'});
+    steps.push({id:'searching-social-local',label:thai?'ค้น Facebook, Instagram, TikTok และ Social ในไทย':'Search Thailand social sources'});
+  }
+  if(research?.scope!=='local-only'){
+    steps.push({id:'searching-global',label:thai?'ขยายไปยังแหล่งข้อมูลสากล':'Expand to global web sources'});
+    steps.push({id:'searching-social-global',label:thai?'ค้น Social และชุมชนผู้ใช้ทั่วโลก':'Search global social and communities'});
+  }
+  steps.push({id:'reading-sources',label:thai?'อ่านแหล่งข้อมูลที่เกี่ยวข้อง':'Read the strongest sources'});
+  steps.push({id:'verifying-sources',label:thai?'ตรวจสอบข้อเท็จจริงและความขัดแย้ง':'Cross-check facts and conflicts'});
+  steps.push({id:'synthesizing',label:thai?'สังเคราะห์เป็นรายงานพร้อมอ้างอิง':'Synthesize the cited report'});
+  const phaseIndex=steps.findIndex(step=>step.id===phase);
+  const complete=run.status==='completed'||phase==='completed';
+  const activeIndex=complete?steps.length:phaseIndex>=0?phaseIndex:0;
+  return <div className="deepResearchProgress">
+    <div className="deepResearchProgressHead"><div><Globe2 size={15}/><span><strong>{thai?'การค้นคว้าเชิงลึก':'Deep research'}</strong><small>{research?.region==='TH'&&research?.scope!=='global'?(thai?'ประเทศไทยก่อน · แล้วขยาย Global':'Thailand first · then Global'):(thai?'ค้นหาแบบ Global':'Global research')}</small></span></div><div className="researchStrategyChips">{research?.localSourceCount?<b>TH {research.localSourceCount}</b>:null}{research?.globalSourceCount?<b>Global {research.globalSourceCount}</b>:null}{research?.socialSourceCount?<b className="social">Social {research.socialSourceCount}</b>:null}</div></div>
+    <div className="deepResearchSteps">{steps.map((step,index)=>{const state=complete||index<activeIndex?'done':index===activeIndex?'active':'pending';return <div className={state} key={step.id}><i>{state==='done'?<Check size={11}/>:null}</i><span>{step.label}</span></div>})}</div>
+    {research?.socialPlatforms?.length?<div className="socialPlatforms"><span>{thai?'Social ที่พบ':'Social found'}</span>{research.socialPlatforms.map(platform=><b key={platform}>{platform}</b>)}</div>:null}
+    {research?.queries?.length?<details className="researchQueries"><summary>{thai?`คำค้น ${research.queries.length} ชุด`:`${research.queries.length} search queries`}</summary><div>{research.queries.map((query,index)=><code key={`${query}-${index}`}>{query}</code>)}</div></details>:null}
+  </div>;
 }
 
 export default function Chat(){
@@ -302,6 +382,7 @@ export default function Chat(){
   const [quotaIndicatorHidden,setQuotaIndicatorHidden]=useState(false);
   const [pendingGuestTurn,setPendingGuestTurn]=useState<PendingGuestTurn|null>(null);
   const [autoContinueClock,setAutoContinueClock]=useState(Date.now());
+  const [deepSearchWizard,setDeepSearchWizard]=useState<DeepSearchWizardState|null>(null);
   const fileRef=useRef<HTMLInputElement>(null);
   const imageRef=useRef<HTMLInputElement>(null);
   const folderRef=useRef<HTMLInputElement>(null);
@@ -310,6 +391,7 @@ export default function Chat(){
   const scrollRef=useRef<HTMLDivElement>(null);
   const autoContinueLockRef=useRef(false);
   const runControlLockRef=useRef(false);
+  const deepSearchPrefsRef=useRef<ResearchPrefs|null>(null);
 
   const runBlocking=Boolean(currentRun&&['queued','running','paused'].includes(currentRun.status));
   const busy=localBusy||runBlocking;
@@ -353,6 +435,9 @@ export default function Chat(){
   const estimatedTotal=estimatedInput+thinking.completion;
   const visibleHistorySessions=historyQuery.trim()?historyResults:sessions;
   const historyGroups=useMemo(()=>historyQuery.trim()?[{label:'Search results',sessions:visibleHistorySessions}]:groupChatSessions(visibleHistorySessions),[historyQuery,visibleHistorySessions]);
+  const deepSearchThai=deepSearchWizard?prefersThai(deepSearchWizard.prompt):false;
+  const deepSearchFocusChoices=deepSearchWizard?deepSearchFocusOptions(deepSearchWizard.prompt):[];
+  const deepSearchEvidenceChoices=deepSearchWizard?deepSearchEvidenceOptions(deepSearchWizard.prompt):[];
 
   useEffect(()=>{
     folderRef.current?.setAttribute('webkitdirectory','');
@@ -504,7 +589,7 @@ export default function Chat(){
     setCurrentRun(latest&&latest.status!=='completed'?latest:null);localStorage.setItem('daiki_current_session',d.session.id);
     setAttachments([]);if(!preserveComposer)setText('');if(closeHistory)window.dispatchEvent(new Event('daiki-close-navigation'));return true;
   };
-  const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setCommandMode('');setCommandSkills([]);setCommandMenu('');setUploadError('');setGenerationNotice('');setEditingMessageId(null);setHistoryQuery('');setHistoryResults([]);setPendingGuestTurn(null);localStorage.removeItem('daiki_current_session');localStorage.removeItem(PENDING_GUEST_TURN_KEY);window.dispatchEvent(new Event('daiki-close-navigation'))};
+  const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setCommandMode('');setCommandSkills([]);setCommandMenu('');setUploadError('');setGenerationNotice('');setEditingMessageId(null);setHistoryQuery('');setHistoryResults([]);setPendingGuestTurn(null);setDeepSearchWizard(null);deepSearchPrefsRef.current=null;localStorage.removeItem('daiki_current_session');localStorage.removeItem(PENDING_GUEST_TURN_KEY);window.dispatchEvent(new Event('daiki-close-navigation'))};
   const openSession=async(id:string,closeHistory=true)=>{setHistoryBusy(true);try{await loadSessionData(id,closeHistory,false)}finally{setHistoryBusy(false)}};
   const deleteSession=async(id:string)=>{if(id===sessionId&&runBlocking)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'DELETE'});if(r.ok){setHistoryResults(xs=>xs.filter(x=>x.id!==id));if(sessionId===id)newChat();await refreshSessions()}};
   const updateSessionInLists=(updated:ChatSession)=>{setSessions(xs=>xs.map(x=>x.id===updated.id?updated:x));setHistoryResults(xs=>xs.map(x=>x.id===updated.id?updated:x))};
@@ -519,8 +604,10 @@ export default function Chat(){
   };
   const updateSessionModel=async(next:string)=>{setModel(next);if(!sessionId)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(sessionId)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({modelAlias:next})});if(r.ok){const updated=await r.json() as ChatSession;setSessions(xs=>xs.map(x=>x.id===updated.id?updated:x))}};
   const saveSessionMessage=async(id:string,role:'user'|'assistant',content:string,attachmentIds:string[]=[])=>{const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({role,content,attachmentIds})});if(!r.ok)throw new Error('Could not save chat history');return await r.json() as StoredMessage};
-  const startRun=async(id:string,selectedCommandMode=commandMode,selectedCommandSkills=commandSkills)=>{
-    const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}/runs`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({researchMode,thinkingMode:effectiveThinkingMode,commandMode:selectedCommandMode,commandSkills:selectedCommandSkills})});const d=await r.json().catch(()=>({})) as ChatRun&{error?:string;run?:ChatRun};
+  const startRun=async(id:string,selectedCommandMode=commandMode,selectedCommandSkills=commandSkills,researchPrefs:ResearchPrefs=browserResearchPrefs(selectedCommandMode==='deep-search'?'deep':'standard'))=>{
+    const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}/runs`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
+      researchMode,thinkingMode:effectiveThinkingMode,commandMode:selectedCommandMode,commandSkills:selectedCommandSkills,researchRegion:researchPrefs.region,researchLocale:researchPrefs.locale,researchScope:researchPrefs.scope,researchDepth:researchPrefs.depth,researchFocus:researchPrefs.focus,
+    })});const d=await r.json().catch(()=>({})) as ChatRun&{error?:string;run?:ChatRun};
     if(r.status===409&&d.run){setCurrentRun(d.run);return d.run}if(!r.ok)throw new Error(errorText(d.error)||'Could not start background run');setCurrentRun(d);return d;
   };
   const controlRun=async(action:'pause'|'resume'|'cancel')=>{if(!currentRun||runControlLockRef.current)return;runControlLockRef.current=true;setBusy(true);try{const r=await fetch(`/api/chat-runs/${encodeURIComponent(currentRun.id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({action})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||'Could not update run');setCurrentRun(d as ChatRun)}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{runControlLockRef.current=false;setBusy(false)}};
@@ -561,9 +648,10 @@ export default function Chat(){
   const attemptGuestTurn=async(turn:PendingGuestTurn)=>{
     const history=guestTurnMessages(turn);
     setMsgs([...history,{role:'ai',text:'',progress:guestProgressLabel(turn,'analyzing')}]);
+    const turnResearch=turn.research||browserResearchPrefs(turn.commandMode==='deep-search'?'deep':'standard');
     let r:Response;
     try{
-      r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json',...guestDeviceHeaders()},body:JSON.stringify({model:'fast',commandMode:turn.commandMode,commandSkills:turn.commandSkills,attachmentIds:turn.attachments.map(a=>a.id),messages:turn.history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),stream:true})});
+      r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json',...guestDeviceHeaders()},body:JSON.stringify({model:'fast',commandMode:turn.commandMode,commandSkills:turn.commandSkills,researchRegion:turnResearch.region,researchLocale:turnResearch.locale,researchScope:turnResearch.scope,researchDepth:turnResearch.depth,researchFocus:turnResearch.focus,attachmentIds:turn.attachments.map(a=>a.id),messages:turn.history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),stream:true})});
     }catch(e){
       const message=(e instanceof Error?e.message:String(e)).toLowerCase();
       if(message.includes('load failed')||message.includes('failed to fetch')||message.includes('network'))return deferGuestTransport(turn);
@@ -583,9 +671,9 @@ export default function Chat(){
     if(!answer)setMsgs(xs=>xs.map((m,i)=>i===xs.length-1?{...m,text:'I didn’t get a response back. Please try again.'}:m));
     return 'completed' as const;
   };
-  const sendGuest=async(content:string,currentAttachments:Attachment[],selectedCommandMode:string,selectedCommandSkills:string[])=>{
+  const sendGuest=async(content:string,currentAttachments:Attachment[],selectedCommandMode:string,selectedCommandSkills:string[],researchPrefs:ResearchPrefs)=>{
     const userMsg:Msg={role:'user',text:content,attachments:currentAttachments};const visibleHistory=[...msgs,userMsg];
-    const turn:PendingGuestTurn={id:globalThis.crypto?.randomUUID?.()||`guest-turn-${Date.now()}`,history:visibleHistory.map(m=>({role:m.role,text:m.text})),attachments:currentAttachments,commandMode:selectedCommandMode,commandSkills:selectedCommandSkills,reason:'guest_rate_limited',retryAt:Date.now(),attempts:0,createdAt:Date.now()};
+    const turn:PendingGuestTurn={id:globalThis.crypto?.randomUUID?.()||`guest-turn-${Date.now()}`,history:visibleHistory.map(m=>({role:m.role,text:m.text})),attachments:currentAttachments,commandMode:selectedCommandMode,commandSkills:selectedCommandSkills,research:researchPrefs,reason:'guest_rate_limited',retryAt:Date.now(),attempts:0,createdAt:Date.now()};
     setText('');setAttachments([]);setCommandMode('');setCommandSkills([]);setCommandMenu('');
     await attemptGuestTurn(turn);
   };
@@ -652,17 +740,24 @@ export default function Chat(){
   },[guest,currentRun?.id,currentRun?.error,currentRun?.updatedAt,autoRunWaiting,autoRunRetryAt,autoContinueClock,quotaChangedForWaitingRun]);
   const cancelGuestAutoContinue=()=>{clearPendingGuestTurn();setUploadError('')};
   const send=async()=>{
-    if(!accessReady||(!text.trim()&&!attachments.length)||busy||autoContinueWaiting||uploading>0)return;setBusy(true);setAttachMenu(false);setUploadError('');setGenerationNotice('');
-    const q=text.trim();let currentAttachments=[...attachments];const selectedCommandMode=commandMode;const selectedCommandSkills=[...commandSkills];const content=q||attachmentReviewPrompt(msgs);
+    if(!accessReady||(!text.trim()&&!attachments.length)||busy||autoContinueWaiting||uploading>0)return;
+    const q=text.trim();const selectedCommandMode=commandMode;const selectedCommandSkills=[...commandSkills];
+    if(selectedCommandMode==='deep-search'&&!deepSearchPrefsRef.current){
+      const defaults=browserResearchPrefs('deep');const firstFocus=deepSearchFocusOptions(q)[0]?.focus||'';
+      setDeepSearchWizard({step:1,prefs:{...defaults,focus:firstFocus},prompt:q,evidence:'balanced'});return;
+    }
+    const researchPrefs=selectedCommandMode==='deep-search'?(deepSearchPrefsRef.current||browserResearchPrefs('deep')):browserResearchPrefs('standard');
+    setBusy(true);setAttachMenu(false);setUploadError('');setGenerationNotice('');
+    let currentAttachments=[...attachments];const content=q||attachmentReviewPrompt(msgs);
     try{
       const autoFileFormat=q&&!pending?requestedFileGenerationFormat(q):'';
       if(autoFileFormat&&!currentAttachments.some(a=>a.source==='generated-file'&&a.name.toLowerCase().endsWith(`.${autoFileFormat}`))){
         setGuestGenerating('file');
         try{const generated=await requestGeneratedFile(q,autoFileFormat);currentAttachments=[...currentAttachments,generated];setAttachments(currentAttachments)}finally{setGuestGenerating('')}
       }
-      if(guest){await sendGuest(content,currentAttachments,selectedCommandMode,selectedCommandSkills);return}
+      if(guest){await sendGuest(content,currentAttachments,selectedCommandMode,selectedCommandSkills,researchPrefs);deepSearchPrefsRef.current=null;return}
       const current=await ensureSession(content);const stored=await saveSessionMessage(current,'user',content,currentAttachments.map(a=>a.id));
-      setMsgs(old=>[...old,{id:stored.id,role:'user',text:stored.content,attachments:currentAttachments}]);setText('');setAttachments([]);setCommandMode('');setCommandSkills([]);setCommandMenu('');await startRun(current,selectedCommandMode,selectedCommandSkills);await refreshSessions();
+      setMsgs(old=>[...old,{id:stored.id,role:'user',text:stored.content,attachments:currentAttachments}]);setText('');setAttachments([]);setCommandMode('');setCommandSkills([]);setCommandMenu('');await startRun(current,selectedCommandMode,selectedCommandSkills,researchPrefs);deepSearchPrefsRef.current=null;await refreshSessions();
     }catch(e){setMsgs(old=>{const last=old[old.length-1];const message=e instanceof Error?e.message:String(e);const display=guest?message:`I couldn’t connect: ${message}`;if(last?.role==='ai'&&!last.text)return old.map((m,i)=>i===old.length-1?{...m,text:display}:m);return [...old,{role:'ai',text:guest?message:`I couldn’t start the run: ${message}`}]})}finally{setBusy(false)}
   };
   const editAndRetry=async(message:Msg,content:string)=>{
@@ -670,6 +765,14 @@ export default function Chat(){
     try{const r=await fetch(`/api/chat-sessions/${encodeURIComponent(sessionId)}/messages/${message.id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({content:next})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||'Could not edit message');setEditingMessageId(null);setEditText('');await loadSessionData(sessionId,false,true);await startRun(sessionId);await refreshSessions()}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setBusy(false)}
   };
   const retryFromAssistant=async(index:number)=>{for(let i=index-1;i>=0;i--){const m=msgs[i];if(m.role==='user'&&m.id){await editAndRetry(m,m.text);return}}};
+  const confirmDeepSearch=()=>{
+    const wizard=deepSearchWizard;if(!wizard)return;
+    const evidence=deepSearchEvidenceOptions(wizard.prompt).find(option=>option.id===wizard.evidence);
+    deepSearchPrefsRef.current={...wizard.prefs,depth:'deep',focus:[wizard.prefs.focus,evidence?.focus||''].filter(Boolean).join(' · ')};
+    setDeepSearchWizard(null);
+    window.setTimeout(()=>void send(),0);
+  };
+  const closeDeepSearchWizard=()=>{deepSearchPrefsRef.current=null;setDeepSearchWizard(null)};
   const submit=(e:FormEvent)=>{e.preventDefault();void send()};
 
   const chatSidebar=<>
@@ -686,6 +789,18 @@ export default function Chat(){
   </>;
   return <div className="chatPage">
     {!guest&&sidebarTarget?createPortal(chatSidebar,sidebarTarget):null}
+    {deepSearchWizard?<div className="modalBackdrop deepSearchBackdrop" role="dialog" aria-modal="true" aria-label={deepSearchThai?'ปรับการค้นคว้าเชิงลึก':'Deep research context'} onMouseDown={e=>{if(e.target===e.currentTarget)closeDeepSearchWizard()}}><div className="modalCard deepSearchWizard">
+      <div className="deepSearchWizardHead"><div><span className="deepSearchIcon"><Globe2 size={18}/></span><div><strong>{deepSearchThai?'บริบทการค้นคว้า':'Research context'}</strong><small>{deepSearchWizard.step}/3 {deepSearchThai?'คำถาม':'questions'} · Deep Search</small></div></div><button type="button" aria-label="Close" onClick={closeDeepSearchWizard}><X size={18}/></button></div>
+      <div className="deepSearchPromptPreview"><span>{deepSearchThai?'หัวข้อ':'Topic'}</span><strong>{deepSearchWizard.prompt||attachmentReviewPrompt(msgs)}</strong></div>
+      {deepSearchWizard.step===1?<section className="deepSearchQuestion"><div className="deepSearchQuestionHead"><span>1</span><div><strong>{deepSearchThai?'ต้องการเน้นข้อมูลด้านใดเป็นพิเศษ?':'What should the research focus on?'}</strong><small>{deepSearchThai?'เลือกมุมหลักก่อน ระบบยังจะค้นประเด็นสำคัญอื่นประกอบให้':'Choose the primary angle; Daiki will still cover important adjacent findings.'}</small></div></div><div className="deepSearchOptionList">{deepSearchFocusChoices.map(option=><button type="button" key={option.id} className={deepSearchWizard.prefs.focus===option.focus?'selected':''} onClick={()=>setDeepSearchWizard(current=>current?{...current,prefs:{...current.prefs,focus:option.focus}}:current)}><i>{deepSearchWizard.prefs.focus===option.focus?<Check size={13}/>:null}</i><span><strong>{option.label}</strong><small>{option.detail}</small></span></button>)}</div><label className="deepSearchCustom"><span>{deepSearchThai?'หรือระบุมุมค้นหาเอง':'Or add a custom focus'}</span><input value={deepSearchWizard.prefs.focus} onChange={e=>setDeepSearchWizard(current=>current?{...current,prefs:{...current.prefs,focus:e.target.value}}:current)} placeholder={deepSearchThai?'เช่น ปัญหาที่ผู้ใช้จริงเจอบ่อยในไทย':'e.g. recurring real-user issues in Thailand'}/></label></section>:null}
+      {deepSearchWizard.step===2?<section className="deepSearchQuestion"><div className="deepSearchQuestionHead"><span>2</span><div><strong>{deepSearchThai?'ต้องการให้ให้น้ำหนักพื้นที่แบบไหน?':'Which geographic scope should be prioritized?'}</strong><small>{deepSearchThai?'ถ้าอยู่ไทย แนะนำประเทศไทยก่อนแล้วค่อยขยาย Global':'For Thailand-based use, Thailand first then Global is recommended.'}</small></div></div><div className="deepSearchOptionList">
+        <button type="button" className={deepSearchWizard.prefs.region==='TH'&&deepSearchWizard.prefs.scope==='local-first'?'selected':''} onClick={()=>setDeepSearchWizard(current=>current?{...current,prefs:{...current.prefs,region:'TH',scope:'local-first'}}:current)}><i>{deepSearchWizard.prefs.region==='TH'&&deepSearchWizard.prefs.scope==='local-first'?<Check size={13}/>:null}</i><span><strong>{deepSearchThai?'ประเทศไทยก่อน แล้วค่อย Global':'Thailand first, then Global'}</strong><small>{deepSearchThai?'ราคา รุ่น โปรโมชั่น กฎหมาย การรับประกัน ศูนย์บริการ และเสียงผู้ใช้ไทยมาก่อน':'Prioritize Thai market facts, rules, availability, service and local user voices before global context.'}</small></span><em>{deepSearchThai?'แนะนำ':'Recommended'}</em></button>
+        <button type="button" className={deepSearchWizard.prefs.region==='TH'&&deepSearchWizard.prefs.scope==='local-only'?'selected':''} onClick={()=>setDeepSearchWizard(current=>current?{...current,prefs:{...current.prefs,region:'TH',scope:'local-only'}}:current)}><i>{deepSearchWizard.prefs.region==='TH'&&deepSearchWizard.prefs.scope==='local-only'?<Check size={13}/>:null}</i><span><strong>{deepSearchThai?'เฉพาะประเทศไทย':'Thailand only'}</strong><small>{deepSearchThai?'เหมาะเมื่อผลลัพธ์ต้องอิงตลาดหรือบริบทไทยเท่านั้น':'Use when the answer must stay within Thai-market or Thai-context evidence.'}</small></span></button>
+        <button type="button" className={deepSearchWizard.prefs.scope==='global'?'selected':''} onClick={()=>setDeepSearchWizard(current=>current?{...current,prefs:{...current.prefs,region:'GLOBAL',scope:'global'}}:current)}><i>{deepSearchWizard.prefs.scope==='global'?<Check size={13}/>:null}</i><span><strong>Global</strong><small>{deepSearchThai?'ค้นทั่วโลกโดยไม่ให้น้ำหนักประเทศไทยเป็นพิเศษ':'Search worldwide without a Thailand-first ranking boost.'}</small></span></button>
+      </div></section>:null}
+      {deepSearchWizard.step===3?<section className="deepSearchQuestion"><div className="deepSearchQuestionHead"><span>3</span><div><strong>{deepSearchThai?'ต้องการให้น้ำหนักแหล่งข้อมูลแบบใด?':'Which evidence mix should be emphasized?'}</strong><small>{deepSearchThai?'Deep Search จะค้น Web + Social และ cross-check ให้อัตโนมัติ':'Deep Search searches both the web and public social sources, then cross-checks them.'}</small></div></div><div className="deepSearchOptionList">{deepSearchEvidenceChoices.map(option=><button type="button" key={option.id} className={deepSearchWizard.evidence===option.id?'selected':''} onClick={()=>setDeepSearchWizard(current=>current?{...current,evidence:option.id}:current)}><i>{deepSearchWizard.evidence===option.id?<Check size={13}/>:null}</i><span><strong>{option.label}</strong><small>{option.detail}</small></span></button>)}</div><div className="deepSearchSocialNote"><Globe2 size={15}/><div><strong>{deepSearchThai?'Social discovery เปิดใช้งาน':'Social discovery enabled'}</strong><span>Facebook · Instagram · TikTok · YouTube · Reddit · Pantip · X · Threads · LinkedIn</span></div></div></section>:null}
+      <div className="deepSearchWizardFoot"><button type="button" className="btn ghost" onClick={closeDeepSearchWizard}>{deepSearchThai?'ยกเลิก':'Cancel'}</button><div>{deepSearchWizard.step>1?<button type="button" className="btn ghost" onClick={()=>setDeepSearchWizard(current=>current?{...current,step:Math.max(1,current.step-1)}:current)}>{deepSearchThai?'ย้อนกลับ':'Back'}</button>:null}{deepSearchWizard.step<3?<button type="button" className="btn primary" onClick={()=>setDeepSearchWizard(current=>current?{...current,step:Math.min(3,current.step+1)}:current)}>{deepSearchThai?'ถัดไป':'Next'}</button>:<button type="button" className="btn primary" onClick={confirmDeepSearch}><Search size={15}/>{deepSearchThai?'เริ่ม Deep Search':'Start Deep Search'}</button>}</div></div>
+    </div></div>:null}
     <section className="chatStage">
       <header className="chatTopbar">
         <div className="chatTopbarTitle">{guest?<div className="guestMark">D</div>:null}<div><strong>{!accessReady?'Daiki AI Passport':guest?'Guest chat':currentSession?.title||'New chat'}</strong><small>{!accessReady?'Preparing chat…':busy?'Daiki is thinking…':guest?'Fast mode · temporary chat':'Daiki AI Passport'}</small></div></div>
@@ -721,7 +836,7 @@ export default function Chat(){
           {msgs.map((m,i)=>{const copyKey=`${m.role}-${m.id??i}`;const tokens=m.run?.activity?.tokens;const research=m.run?.activity?.research;const sources=m.sources||research?.sources||[];const runThinking=m.run?.activity?.thinking;const thinkingModeLabel=runThinking?.mode||m.run?.thinkingMode||'off';const effectiveEffort=runThinking?.effectiveEffort;const reasoningTokens=tokens?.reasoning||0;return <div key={copyKey} className={`messageRow ${m.role}`}><div className="messageAvatar">{m.role==='ai'?'D':'You'}</div><div className="messageStack"><div className="bubble">{m.role==='user'&&editingMessageId===m.id?<div className="messageEditor"><textarea autoFocus value={editText} onChange={e=>setEditText(e.target.value)} rows={Math.min(8,Math.max(2,editText.split('\n').length))}/><div><button type="button" onClick={()=>{setEditingMessageId(null);setEditText('')}}>Cancel</button><button type="button" className="primary" onClick={()=>void editAndRetry(m,editText)}>Save & Retry</button></div></div>:<MessageContent message={m} sources={sources}/>}</div>
             {m.text?<div className="messageActions"><button type="button" aria-label="Copy message" onClick={()=>void copyMessage(m.text,copyKey)}>{copiedKey===copyKey?<Check size={13}/>:<Copy size={13}/>}<span>{copiedKey===copyKey?'Copied':'Copy'}</span></button>{m.role==='user'&&m.id?<button type="button" disabled={busy} onClick={()=>{setEditingMessageId(m.id!);setEditText(m.text)}}><Pencil size={13}/><span>Edit</span></button>:null}{m.role==='ai'&&!guest?<button type="button" disabled={busy} onClick={()=>void retryFromAssistant(i)}><RotateCcw size={13}/><span>Retry</span></button>:null}</div>:null}
             {m.role==='ai'&&(sources.length||research?.used||m.run||tokens)?<div className="responseMetaBar">
-              {research?.used||sources.length?<><ResearchSources sources={sources}/><span className="researchBadge"><Globe2 size={12}/>Web searched · {research?.sourceCount||sources.length}</span></>:null}
+              {research?.used||sources.length?<><ResearchSources sources={sources}/><span className="researchBadge"><Globe2 size={12}/>{m.run?.commandMode==='deep-search'||research?.depth==='deep'?'Deep Search':'Web searched'} · {research?.sourceCount||sources.length}</span>{research?.socialSourceCount?<span className="socialResearchBadge">Social · {research.socialSourceCount}{research.socialPlatforms?.length?` · ${research.socialPlatforms.slice(0,3).join(', ')}`:''}</span>:null}{research?.region==='TH'&&research.scope!=='global'?<span className="localResearchBadge">Thailand first</span>:null}</>:null}
               {m.run&&thinkingModeLabel!=='off'?<span className="thinkingBadge"><Brain size={12}/>Thought · {thinkingModeLabel}{effectiveEffort&&effectiveEffort!==thinkingModeLabel?` → ${effectiveEffort}`:''}{m.run.activity?.durationMs!=null?` · ${(m.run.activity.durationMs/1000).toFixed(1)}s`:''}{reasoningTokens>0?` · ${fmtTokens(reasoningTokens)} reasoning`:''}</span>:null}
               {tokens?<span className="tokenUsageBadge">Tokens · {fmtTokens(tokens.total)}</span>:null}
               {m.run?<RunActivityDetails run={m.run}/>:null}
@@ -729,7 +844,7 @@ export default function Chat(){
             {m.attachments?.length?<div className="sentAttachments">{m.attachments.map(a=><a key={a.id} className="sentAttachment" href={`${guest?'/api/guest/attachments':'/api/attachments'}/${encodeURIComponent(a.id)}`} target="_blank" rel="noreferrer">{a.mediaType.startsWith('image/')?<ImageIcon size={14}/>:a.source==='folder'?<FolderOpen size={14}/>:<File size={14}/>}<span>{a.relativePath}</span></a>)}</div>:null}
           </div></div>})}
           {pendingGuestTurn?<div className="messageRow ai runMessage autoContinueMessage"><div className="messageAvatar">D</div><div className="messageStack"><div className="bubble"><div className="backgroundRunStatus waiting"><RotateCcw size={15}/><span>{pendingGuestTurn.reason==='guest_rate_limited'?'Guest rate limit reached.':pendingGuestTurn.reason==='provider_rate_limited'?'Model provider is temporarily rate limited.':pendingGuestTurn.reason==='transport_retry'?'Connection interrupted. Daiki will reconnect automatically.':'Guest token quota is waiting for reset.'} Your message is saved and will continue automatically in <strong>{guestAutoWaitLabel}</strong>.</span></div></div><div className="runControls"><button type="button" disabled={localBusy} onClick={cancelGuestAutoContinue}><X size={13}/>Stop waiting</button></div></div></div>:null}
-          {currentRun&&currentRun.status!=='completed'?<div className="messageRow ai runMessage"><div className="messageAvatar">D</div><div className="messageStack"><div className="bubble">{currentRun.status==='queued'||currentRun.status==='running'?<div className="backgroundRunStatus thinking"><div className="typingDots" aria-label="Daiki is thinking"><i/><i/><i/></div><span>{runProgressLabel(currentRun,msgs)}</span></div>:currentRun.status==='paused'?<div className="backgroundRunStatus"><Pause size={15}/><span>Paused</span></div>:autoRunWaiting?<div className="backgroundRunStatus waiting"><RotateCcw size={15}/><span>{currentRun.error==='pending_chat_rate_limited'?'Rate limit reached.':'Token quota is waiting for reset.'} {autoRunRetryAt?<><span>This message is saved and will continue automatically in </span><strong>{runAutoWaitLabel}</strong>.</>:<span>This message is saved and will continue automatically when quota becomes available.</span>}</span></div>:<div className="backgroundRunStatus error"><span>{friendlyRunError(currentRun.error)}</span></div>}</div><div className="runControls">{currentRun.status==='running'||currentRun.status==='queued'?<button type="button" disabled={localBusy} onClick={()=>void controlRun('pause')}><Pause size={13}/>Pause</button>:autoRunWaiting?<><button type="button" disabled={localBusy} onClick={()=>void controlRun('resume')}><Play size={13}/>Continue now</button><button type="button" disabled={localBusy} onClick={()=>void controlRun('cancel')}><X size={13}/>Stop waiting</button></>:currentRun.status==='paused'||currentRun.status==='failed'||currentRun.status==='cancelled'?<button type="button" disabled={localBusy} onClick={()=>void controlRun('resume')}><Play size={13}/>Play</button>:null}</div><RunActivityDetails run={currentRun}/></div></div>:null}
+          {currentRun&&currentRun.status!=='completed'?<div className="messageRow ai runMessage"><div className="messageAvatar">D</div><div className="messageStack"><div className="bubble">{currentRun.status==='queued'||currentRun.status==='running'?<div className="backgroundRunStatus thinking"><div className="typingDots" aria-label="Daiki is thinking"><i/><i/><i/></div><span>{runProgressLabel(currentRun,msgs)}</span></div>:currentRun.status==='paused'?<div className="backgroundRunStatus"><Pause size={15}/><span>Paused</span></div>:autoRunWaiting?<div className="backgroundRunStatus waiting"><RotateCcw size={15}/><span>{currentRun.error==='pending_chat_rate_limited'?'Rate limit reached.':'Token quota is waiting for reset.'} {autoRunRetryAt?<><span>This message is saved and will continue automatically in </span><strong>{runAutoWaitLabel}</strong>.</>:<span>This message is saved and will continue automatically when quota becomes available.</span>}</span></div>:<div className="backgroundRunStatus error"><span>{friendlyRunError(currentRun.error)}</span></div>}</div><DeepResearchProgress run={currentRun}/><div className="runControls">{currentRun.status==='running'||currentRun.status==='queued'?<button type="button" disabled={localBusy} onClick={()=>void controlRun('pause')}><Pause size={13}/>Pause</button>:autoRunWaiting?<><button type="button" disabled={localBusy} onClick={()=>void controlRun('resume')}><Play size={13}/>Continue now</button><button type="button" disabled={localBusy} onClick={()=>void controlRun('cancel')}><X size={13}/>Stop waiting</button></>:currentRun.status==='paused'||currentRun.status==='failed'||currentRun.status==='cancelled'?<button type="button" disabled={localBusy} onClick={()=>void controlRun('resume')}><Play size={13}/>Play</button>:null}</div><RunActivityDetails run={currentRun}/></div></div>:null}
         </div>}
       </div>
 
