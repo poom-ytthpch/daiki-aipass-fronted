@@ -17,17 +17,57 @@ type QuotaState={mode?:string;limit?:number;used?:number;remaining?:number;reset
 type UsageResponse={usage?:{inputTokens?:number;outputTokens?:number;totalTokens?:number};quota?:QuotaState};
 type RunActivity={phase?:string;durationMs?:number;requestId?:string;httpStatus?:number;retryAfterSeconds?:number;quota?:QuotaState;research?:{mode?:string;query?:string;used?:boolean;error?:string;sourceCount?:number;sources?:RunSource[]};thinking?:{mode?:string;reasoningBudget?:number;requestedEffort?:string;effectiveEffort?:string;nativeReasoning?:boolean;model?:string;estimate?:unknown};tokens?:TokenUsage};
 type ChatRun={id:string;sessionId:string;status:'queued'|'running'|'paused'|'completed'|'failed'|'cancelled';researchMode:string;thinkingMode:string;commandMode?:string;commandSkills?:string[];requestId?:string;content:string;error?:string;activity?:RunActivity;createdAt:string;startedAt?:string;completedAt?:string;updatedAt:string};
-type Msg={id?:number;role:'user'|'ai';text:string;attachments?:Attachment[];sources?:RunSource[];runId?:string;run?:ChatRun};
+type Msg={id?:number;role:'user'|'ai';text:string;progress?:string;attachments?:Attachment[];sources?:RunSource[];runId?:string;run?:ChatRun};
 type ChatSession={id:string;title:string;modelAlias:string;pinnedAt?:string;createdAt:string;updatedAt:string};
 type StoredMessage={id:number;role:'user'|'assistant';content:string;attachmentIds:string[];runId?:string;createdAt:string};
 type PendingPolicy={model:string;tokenLimitPerDay:number;requestsPerHour:number;minIntervalSeconds:number;maxCompletionTokens:number;textOnly:boolean};
 type Account={status?:'pending'|'approved'|'suspended'|'rejected';pendingChatPolicy?:PendingPolicy};
-type GuestPolicy={enabled:boolean;model:string;quotaMode?:'limited'|'unlimited';tokenLimit:number;intervalKind:string;requestsPerHour:number;minIntervalSeconds:number;maxCompletionTokens:number;allowUploads:boolean;allowImageGeneration:boolean;allowFileGeneration:boolean;maxUploadBytes:number;maxImageUploadBytes?:number;maxUploadsPerHour:number;maxStoredFiles:number;maxStoredBytes:number;maxAttachmentsPerMessage?:number;attachmentRetentionHours:number;imageGenerationsPerDay:number;fileGenerationsPerDay:number;maxGeneratedFileBytes:number;maxGeneratedImageBytes?:number};
+type GuestPolicy={enabled:boolean;model:string;quotaMode?:'limited'|'unlimited';tokenLimit:number;intervalKind:string;requestsPerHour:number;minIntervalSeconds:number;maxCompletionTokens:number;allowUploads:boolean;allowImageGeneration:boolean;allowFileGeneration:boolean;maxUploadBytes:number;maxImageUploadBytes?:number;maxUploadsPerHour:number;maxStoredFiles:number;maxStoredBytes:number;maxAttachmentsPerMessage?:number;attachmentRetentionHours:number;imageGenerationsPerDay:number;fileGenerationsPerDay:number;maxGeneratedFileBytes:number;maxGeneratedImageBytes?:number;quota?:QuotaState;rateRetryAfterSeconds?:number};
 type ThinkingMode='off'|'low'|'medium'|'high';
 type Prefs={defaultModel?:string;responseStyle?:string;researchMode?:'auto'|'web'|'off';thinkingMode?:ThinkingMode};
 type CommandOption={id:string;name:string;description:string;guest?:boolean};
 type CommandCatalog={modes:CommandOption[];skills:CommandOption[]};
 type CapabilityInfo={mode:string;maxToolRounds:number;skills:{id:string;name:string;description:string}[];tools:{id:string;name:string;description:string}[];commands?:CommandCatalog};
+type GuestHistoryEntry={role:'user'|'ai';text:string};
+type GuestAutoContinueReason='guest_rate_limited'|'guest_quota_exhausted'|'provider_rate_limited'|'transport_retry';
+type PendingGuestTurn={id:string;history:GuestHistoryEntry[];attachments:Attachment[];commandMode:string;commandSkills:string[];reason:GuestAutoContinueReason;retryAt:number;attempts:number;createdAt:number};
+type GuestQuotaError={error?:unknown;detail?:unknown;retryAfterSeconds?:number;quota?:QuotaState};
+const AUTO_CONTINUE_POLL_MS=20_000;
+const PENDING_GUEST_TURN_KEY='daiki_guest_pending_turn_v1';
+const isGuestAutoContinueReason=(value:string):value is GuestAutoContinueReason=>value==='guest_rate_limited'||value==='guest_quota_exhausted'||value==='provider_rate_limited'||value==='transport_retry';
+const retryableRunError=(run?:ChatRun|null)=>Boolean(run?.status==='failed'&&(run.error==='quota_exhausted'||run.error==='pending_chat_rate_limited'));
+const runAutoContinueAt=(run?:ChatRun|null)=>{
+  if(!run||!retryableRunError(run))return 0;
+  if(run.error==='quota_exhausted'){
+    const resetAt=run.activity?.quota?.resetAt?new Date(run.activity.quota.resetAt).getTime():0;
+    // Lifetime/manual-only quotas are readiness-polled instead of repeatedly
+    // invoking inference, which could consume another independent rate limit.
+    return Number.isFinite(resetAt)&&resetAt>Date.now()?resetAt:0;
+  }
+  const updatedAt=new Date(run.updatedAt).getTime();
+  const base=Number.isFinite(updatedAt)?updatedAt:Date.now();
+  const seconds=Math.max(1,Number(run.activity?.retryAfterSeconds||AUTO_CONTINUE_POLL_MS/1000));
+  return base+seconds*1000;
+};
+const quotaAutoContinueAt=(payload:GuestQuotaError,response?:Response)=>{
+  const headerSeconds=Number(response?.headers.get('retry-after')||0);
+  const seconds=Math.max(0,Number(payload.retryAfterSeconds||headerSeconds||0));
+  if(seconds>0)return Date.now()+seconds*1000;
+  const resetAt=payload.quota?.resetAt?new Date(payload.quota.resetAt).getTime():0;
+  if(Number.isFinite(resetAt)&&resetAt>Date.now())return resetAt;
+  return Date.now()+AUTO_CONTINUE_POLL_MS;
+};
+const autoContinueTimeLabel=(retryAt:number,now:number)=>{
+  const seconds=Math.max(0,Math.ceil((retryAt-now)/1000));
+  if(seconds<60)return `${seconds}s`;
+  const minutes=Math.floor(seconds/60);const remainder=seconds%60;
+  return remainder?`${minutes}m ${remainder}s`:`${minutes}m`;
+};
+const guestTurnMessages=(turn:PendingGuestTurn):Msg[]=>{
+  let lastUser=-1;
+  for(let i=turn.history.length-1;i>=0;i--){if(turn.history[i].role==='user'){lastUser=i;break}}
+  return turn.history.map((m,i)=>({role:m.role,text:m.text,attachments:i===lastUser?turn.attachments:undefined}));
+};
 const guestDeviceHeaders=()=>{
   if(typeof window==='undefined')return {} as Record<string,string>;
   let id=localStorage.getItem('daiki_guest_device_id')||'';
@@ -86,6 +126,33 @@ const errorText=(value:unknown):string=>{
     try{return JSON.stringify(value)}catch{return 'Gateway unavailable'}
   }
   return value==null?'':String(value);
+};
+const errorCode=(value:unknown):string=>{
+  if(typeof value==='string')return value.trim().toLowerCase();
+  if(value&&typeof value==='object'){
+    const v=value as Record<string,unknown>;
+    if(typeof v.code==='string'&&v.code.trim())return v.code.trim().toLowerCase();
+    if(v.error!==undefined)return errorCode(v.error);
+  }
+  return '';
+};
+const prefersThai=(text:string)=>/[\u0E00-\u0E7F]/.test(text)||(typeof navigator!=='undefined'&&navigator.language?.toLowerCase().startsWith('th'));
+const guestProgressLabel=(turn:PendingGuestTurn,stage:'analyzing'|'generating')=>{
+  const latest=[...turn.history].reverse().find(m=>m.role==='user')?.text||'';
+  const thai=prefersThai(latest);
+  if(stage==='generating')return thai?'กำลังสร้างคำตอบ…':'Generating response…';
+  if(turn.attachments.some(a=>a.mediaType.startsWith('image/')))return thai?'กำลังอ่านรูปภาพและวิเคราะห์…':'Reading the image and analyzing…';
+  if(turn.attachments.length)return thai?'กำลังอ่านไฟล์และวิเคราะห์…':'Reading the attachment and analyzing…';
+  return thai?'กำลังวิเคราะห์คำถาม…':'Analyzing your question…';
+};
+const runProgressLabel=(run:ChatRun,messages:Msg[])=>{
+  const latest=[...messages].reverse().find(m=>m.role==='user');
+  const thai=prefersThai(latest?.text||'');
+  if(run.status==='queued')return thai?'กำลังเข้าคิวประมวลผล…':'Queued for processing…';
+  if(latest?.attachments?.some(a=>a.mediaType.startsWith('image/')))return thai?'กำลังอ่านรูปภาพและวิเคราะห์…':'Reading the image and analyzing…';
+  if(latest?.attachments?.length)return thai?'กำลังอ่านไฟล์และวิเคราะห์…':'Reading the attachment and analyzing…';
+  if(run.thinkingMode!=='off')return thai?'กำลังวิเคราะห์และสร้างคำตอบ…':`Thinking · ${run.thinkingMode.charAt(0).toUpperCase()+run.thinkingMode.slice(1)}…`;
+  return thai?'กำลังสร้างคำตอบ…':'Generating response…';
 };
 const isAutoAttachmentPrompt=(value:string)=>{const n=value.trim().toLowerCase().replace(/[.!?]+$/,'');return ['please review the attached content','please review the attached file','please review the attached image','review the attached content'].includes(n)};
 const attachmentReviewPrompt=(messages:Msg[])=>{
@@ -146,7 +213,7 @@ function ResearchSources({sources}:{sources:RunSource[]}){
 
 function MessageContent({message,sources=[]}:{message:Msg;sources?:RunSource[]}){
   if(message.role==='user')return <div className="userText">{message.text}</div>;
-  if(!message.text)return <div className="typingDots" aria-label="Daiki is thinking"><i/><i/><i/></div>;
+  if(!message.text)return <div className="backgroundRunStatus thinking"><div className="typingDots" aria-label={message.progress||'Daiki is thinking'}><i/><i/><i/></div><span>{message.progress||'Daiki is thinking…'}</span></div>;
   const content=linkResearchCitations(message.text,sources);
   return <div className="markdownBody"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{a:({href,children,...props})=>{const label=String(children??'');const citation=/^\d+$/.test(label)&&Boolean(href?.startsWith('http'));return <a {...props} className={citation?'citationLink':undefined} href={href} target={href?.startsWith('http')?'_blank':undefined} rel={href?.startsWith('http')?'noreferrer':undefined}>{children}</a>}}}>{content}</ReactMarkdown></div>;
 }
@@ -161,7 +228,7 @@ function RunActivityDetails({run}:{run:ChatRun}){
       <section><strong>Web research</strong>{research?.query?<p>Query: <code>{research.query}</code></p>:<p>{research?.mode==='off'?'Web research disabled.':run.status==='running'||run.status==='queued'?'Research is evaluated by the backend while this run continues.':'No web query was required for this answer.'}</p>}{research?.error?<p className="activityError">{research.error}</p>:null}{sources.length?<div className="activitySources">{sources.map((source,i)=><a key={`${source.url||i}`} href={source.url||'#'} target="_blank" rel="noreferrer"><span>{source.title||source.url||`Source ${i+1}`}</span>{source.snippet?<small>{source.snippet}</small>:null}<em>{source.engine||'web'}</em></a>)}</div>:null}</section>
       <section><strong>Thinking</strong><p>Mode: {thinking?.mode||run.thinkingMode}{thinking?.effectiveEffort?` · native effort ${thinking.effectiveEffort}`:''}{thinking?.model?` · ${thinking.model}`:''}{thinking?.nativeReasoning===false&&thinking?.mode!=='off'?' · prompt-guided fallback':''}. Private chain-of-thought is not exposed.</p>{tokens?<p>{fmtTokens(tokens.reasoning)} actual reasoning tokens reported by the provider.</p>:null}</section>
       {tokens?<section><strong>Token usage</strong><p>{fmtTokens(tokens.input)} input · {fmtTokens(tokens.reasoning)} thinking · {fmtTokens(tokens.answer)} answer · {fmtTokens(tokens.total)} total</p></section>:null}
-      {run.error?<section><strong>Error</strong>{run.error==='quota_exhausted'?<p className="activityError">{`Token quota used up${activity.quota?.resetAt?` · resets ${new Date(activity.quota.resetAt).toLocaleString()}`:''}`}</p>:run.error==='pending_chat_rate_limited'?<p className="activityError">{`Please wait ${activity.retryAfterSeconds||1}s before sending again.`}</p>:<div className="runErrorSummary"><strong>{friendlyRunError(run.error)}</strong><span>Your chat and sources are preserved. Use Retry/Play to continue after the runtime recovers.</span><details className="runErrorTechnical"><summary>Technical details</summary><code>{run.error}</code></details></div>}</section>:null}
+      {run.error?<section><strong>Error</strong>{run.error==='quota_exhausted'?<p className="activityError">{`Token quota used up${activity.quota?.resetAt?` · resets ${new Date(activity.quota.resetAt).toLocaleString()}`:''}. This run is saved and auto-continues when quota allows.`}</p>:run.error==='pending_chat_rate_limited'?<p className="activityError">{`Rate limit reached · this run is saved and auto-continues after ${activity.retryAfterSeconds||20}s.`}</p>:<div className="runErrorSummary"><strong>{friendlyRunError(run.error)}</strong><span>Your chat and sources are preserved. Use Retry/Play to continue after the runtime recovers.</span><details className="runErrorTechnical"><summary>Technical details</summary><code>{run.error}</code></details></div>}</section>:null}
       {activity.requestId||run.requestId?<small className="activityRequestId">Request {activity.requestId||run.requestId}</small>:null}
     </div>
   </details>;
@@ -207,15 +274,26 @@ export default function Chat(){
   const [resetBusy,setResetBusy]=useState(false);
   const [resetGiftNotice,setResetGiftNotice]=useState('');
   const [quotaIndicatorHidden,setQuotaIndicatorHidden]=useState(false);
+  const [pendingGuestTurn,setPendingGuestTurn]=useState<PendingGuestTurn|null>(null);
+  const [autoContinueClock,setAutoContinueClock]=useState(Date.now());
   const fileRef=useRef<HTMLInputElement>(null);
   const imageRef=useRef<HTMLInputElement>(null);
   const folderRef=useRef<HTMLInputElement>(null);
   const textareaRef=useRef<HTMLTextAreaElement>(null);
   const historySearchRef=useRef<HTMLInputElement>(null);
   const scrollRef=useRef<HTMLDivElement>(null);
+  const autoContinueLockRef=useRef(false);
+  const runControlLockRef=useRef(false);
 
   const runBlocking=Boolean(currentRun&&['queued','running','paused'].includes(currentRun.status));
   const busy=localBusy||runBlocking;
+  const autoRunWaiting=retryableRunError(currentRun);
+  const autoRunRetryAt=runAutoContinueAt(currentRun);
+  const autoContinueWaiting=Boolean(pendingGuestTurn)||autoRunWaiting;
+  const guestAutoWaitLabel=pendingGuestTurn?autoContinueTimeLabel(pendingGuestTurn.retryAt,autoContinueClock):'';
+  const runAutoWaitLabel=autoRunWaiting&&autoRunRetryAt?autoContinueTimeLabel(autoRunRetryAt,autoContinueClock):'';
+  const pendingGuestTurnId=pendingGuestTurn?.id||'';
+  const pendingGuestTurnReason=pendingGuestTurn?.reason||'';
   const pending=account?.status==='pending';
   const attachmentRestricted=!accessReady||(guest?!guestPolicy?.allowUploads:false);
   const currentSession=sessions.find(x=>x.id===sessionId);
@@ -224,6 +302,7 @@ export default function Chat(){
   // Keep a failed run's historical error visible, but do not let that stale
   // error lock the composer after a user/admin reset has restored quota.
   const quotaBlocked=quotaExhausted||(usageInfo==null&&currentRun?.error==='quota_exhausted');
+  const quotaChangedForWaitingRun=Boolean(autoRunWaiting&&currentRun?.error==='quota_exhausted'&&quota&&currentRun.activity?.quota&&(quota.mode==='unlimited'||(quota.windowStart&&quota.windowStart!==currentRun.activity.quota.windowStart)||Number(quota.limit||0)>Number(currentRun.activity.quota.limit||0)||Number(quota.remaining||0)>Number(currentRun.activity.quota.remaining||0)));
   const resetCredits=quota?.resetCredits;
   const resetsAvailable=Number(resetCredits?.available||0);
   const resetRemainingMs=quota?.resetAt?Math.max(0,new Date(quota.resetAt).getTime()-quotaClock):0;
@@ -271,6 +350,15 @@ export default function Chat(){
       }catch{}
       guestDeviceHeaders();setGuest(true);setModel('fast');setResearchMode('off');setThinkingMode('off');
       try{const [gp,cap]=await Promise.all([fetch('/api/guest/policy',{cache:'no-store'}),fetch('/api/guest/capabilities',{cache:'no-store',headers:guestDeviceHeaders()})]);if(gp.ok)setGuestPolicy(await gp.json() as GuestPolicy);if(cap.ok)setCapabilities(await cap.json() as CapabilityInfo)}catch{}
+      try{
+        const raw=localStorage.getItem(PENDING_GUEST_TURN_KEY);
+        if(raw){
+          const restored=JSON.parse(raw) as PendingGuestTurn;
+          if(restored?.id&&Array.isArray(restored.history)&&isGuestAutoContinueReason(restored.reason)){
+            setPendingGuestTurn(restored);setMsgs(guestTurnMessages(restored));
+          }else localStorage.removeItem(PENDING_GUEST_TURN_KEY);
+        }
+      }catch{localStorage.removeItem(PENDING_GUEST_TURN_KEY)}
       setAccessReady(true);
     })();
     return()=>window.clearTimeout(prefTimer);
@@ -388,7 +476,7 @@ export default function Chat(){
     setCurrentRun(latest&&latest.status!=='completed'?latest:null);localStorage.setItem('daiki_current_session',d.session.id);
     setAttachments([]);if(!preserveComposer)setText('');if(closeHistory)window.dispatchEvent(new Event('daiki-close-navigation'));return true;
   };
-  const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setCommandMode('');setCommandSkills([]);setCommandMenu('');setUploadError('');setEditingMessageId(null);setHistoryQuery('');setHistoryResults([]);localStorage.removeItem('daiki_current_session');window.dispatchEvent(new Event('daiki-close-navigation'))};
+  const newChat=()=>{setSessionId('');setMsgs([]);setCurrentRun(null);setAttachments([]);setText('');setCommandMode('');setCommandSkills([]);setCommandMenu('');setUploadError('');setEditingMessageId(null);setHistoryQuery('');setHistoryResults([]);setPendingGuestTurn(null);localStorage.removeItem('daiki_current_session');localStorage.removeItem(PENDING_GUEST_TURN_KEY);window.dispatchEvent(new Event('daiki-close-navigation'))};
   const openSession=async(id:string,closeHistory=true)=>{setHistoryBusy(true);try{await loadSessionData(id,closeHistory,false)}finally{setHistoryBusy(false)}};
   const deleteSession=async(id:string)=>{if(id===sessionId&&runBlocking)return;const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`,{method:'DELETE'});if(r.ok){setHistoryResults(xs=>xs.filter(x=>x.id!==id));if(sessionId===id)newChat();await refreshSessions()}};
   const updateSessionInLists=(updated:ChatSession)=>{setSessions(xs=>xs.map(x=>x.id===updated.id?updated:x));setHistoryResults(xs=>xs.map(x=>x.id===updated.id?updated:x))};
@@ -407,22 +495,120 @@ export default function Chat(){
     const r=await fetch(`/api/chat-sessions/${encodeURIComponent(id)}/runs`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({researchMode,thinkingMode:effectiveThinkingMode,commandMode:selectedCommandMode,commandSkills:selectedCommandSkills})});const d=await r.json().catch(()=>({})) as ChatRun&{error?:string;run?:ChatRun};
     if(r.status===409&&d.run){setCurrentRun(d.run);return d.run}if(!r.ok)throw new Error(errorText(d.error)||'Could not start background run');setCurrentRun(d);return d;
   };
-  const controlRun=async(action:'pause'|'resume')=>{if(!currentRun)return;setBusy(true);try{const r=await fetch(`/api/chat-runs/${encodeURIComponent(currentRun.id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({action})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||'Could not update run');setCurrentRun(d as ChatRun)}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setBusy(false)}};
+  const controlRun=async(action:'pause'|'resume'|'cancel')=>{if(!currentRun||runControlLockRef.current)return;runControlLockRef.current=true;setBusy(true);try{const r=await fetch(`/api/chat-runs/${encodeURIComponent(currentRun.id)}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({action})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||'Could not update run');setCurrentRun(d as ChatRun)}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{runControlLockRef.current=false;setBusy(false)}};
   const uploadOne=async(file:File,source:'file'|'image'|'folder')=>{if(guest&&source==='folder')throw new Error('Guest folder upload is disabled');const form=new FormData();form.set('file',file);form.set('source',source);form.set('relativePath',source==='folder'?rel(file):file.name);const r=await fetch(guest?'/api/guest/attachments':'/api/attachments',{method:'POST',headers:guest?guestDeviceHeaders():undefined,body:form});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(errorText(d.error)||`Could not upload ${file.name}`);return d as Attachment};
   const uploadFiles=async(files:FileList|File[],source:'file'|'image'|'folder')=>{if(attachmentRestricted||runBlocking||localBusy||(guest&&source==='folder'))return;const list=Array.from(files);if(!list.length)return;setAttachMenu(false);setUploadError('');setUploading(x=>x+list.length);try{const uploaded:Attachment[]=[];for(const f of list)uploaded.push(await uploadOne(f,source));setAttachments(x=>[...x,...uploaded])}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setUploading(x=>Math.max(0,x-list.length))}};
   const removeAttachment=async(a:Attachment)=>{setAttachments(x=>x.filter(v=>v.id!==a.id));void fetch(`${guest?'/api/guest/attachments':'/api/attachments'}/${encodeURIComponent(a.id)}`,{method:'DELETE',headers:guest?guestDeviceHeaders():undefined}).catch(()=>{})};
   const generateGuestAttachment=async(kind:'image'|'file')=>{const prompt=text.trim();if(!guest||!prompt)return;setAttachMenu(false);setUploadError('');setGuestGenerating(kind);try{const r=await fetch(`/api/guest/generate/${kind}`,{method:'POST',headers:{'content-type':'application/json',...guestDeviceHeaders()},body:JSON.stringify({prompt,name:kind==='file'?'generated.txt':'generated.png'})});const d=await r.json().catch(()=>({})) as {attachment?:Attachment;error?:unknown};if(!r.ok||!d.attachment)throw new Error(errorText(d.error)||`${kind} generation unavailable`);setAttachments(x=>[...x,d.attachment!])}catch(e){setUploadError(e instanceof Error?e.message:String(e))}finally{setGuestGenerating('')}};
-  const sendGuest=async(content:string,currentAttachments:Attachment[],selectedCommandMode:string,selectedCommandSkills:string[])=>{
-    const userMsg:Msg={role:'user',text:content,attachments:currentAttachments};const history=[...msgs,userMsg];setMsgs([...history,{role:'ai',text:''}]);setText('');setAttachments([]);setCommandMode('');setCommandSkills([]);setCommandMenu('');
-    const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json',...guestDeviceHeaders()},body:JSON.stringify({model:'fast',commandMode:selectedCommandMode,commandSkills:selectedCommandSkills,attachmentIds:currentAttachments.map(a=>a.id),messages:history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),stream:true})});
-    if(!r.ok||!r.body){const d=await r.json().catch(()=>({error:'Gateway unavailable'}));const raw=errorText(d.error||d.detail)||'Gateway unavailable';throw new Error(friendlyGuestError(raw,d.retryAfterSeconds))}
+  const persistPendingGuestTurn=(turn:PendingGuestTurn|null)=>{try{if(turn)localStorage.setItem(PENDING_GUEST_TURN_KEY,JSON.stringify(turn));else localStorage.removeItem(PENDING_GUEST_TURN_KEY)}catch{}};
+  const deferGuestTurn=(turn:PendingGuestTurn,payload:GuestQuotaError,response?:Response)=>{
+    const code=errorCode(payload.error||payload.detail)||errorText(payload.error||payload.detail).trim().toLowerCase();
+    if(!isGuestAutoContinueReason(code))return false;
+    const next:PendingGuestTurn={...turn,reason:code,retryAt:quotaAutoContinueAt(payload,response),attempts:turn.attempts+1};
+    setPendingGuestTurn(next);persistPendingGuestTurn(next);setMsgs(guestTurnMessages(turn));
+    return true;
+  };
+  const clearPendingGuestTurn=()=>{setPendingGuestTurn(null);persistPendingGuestTurn(null)};
+  const deferGuestTransport=(turn:PendingGuestTurn)=>{
+    const next:PendingGuestTurn={...turn,reason:'transport_retry',retryAt:Date.now()+AUTO_CONTINUE_POLL_MS,attempts:turn.attempts+1};
+    setPendingGuestTurn(next);persistPendingGuestTurn(next);setMsgs(guestTurnMessages(turn));
+    return 'deferred' as const;
+  };
+  const attemptGuestTurn=async(turn:PendingGuestTurn)=>{
+    const history=guestTurnMessages(turn);
+    setMsgs([...history,{role:'ai',text:'',progress:guestProgressLabel(turn,'analyzing')}]);
+    let r:Response;
+    try{
+      r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json',...guestDeviceHeaders()},body:JSON.stringify({model:'fast',commandMode:turn.commandMode,commandSkills:turn.commandSkills,attachmentIds:turn.attachments.map(a=>a.id),messages:turn.history.map(m=>({role:m.role==='ai'?'assistant':'user',content:m.text})),stream:true})});
+    }catch(e){
+      const message=(e instanceof Error?e.message:String(e)).toLowerCase();
+      if(message.includes('load failed')||message.includes('failed to fetch')||message.includes('network'))return deferGuestTransport(turn);
+      throw e;
+    }
+    if(!r.ok||!r.body){
+      const d=await r.json().catch(()=>({error:'Gateway unavailable'})) as GuestQuotaError;
+      if(r.status===429&&deferGuestTurn(turn,d,r))return 'deferred' as const;
+      clearPendingGuestTurn();
+      const raw=errorText(d.error||d.detail)||'Gateway unavailable';throw new Error(friendlyGuestError(raw,d.retryAfterSeconds));
+    }
+    clearPendingGuestTurn();
+    setMsgs(xs=>xs.map((m,i)=>i===xs.length-1?{...m,progress:guestProgressLabel(turn,'generating')}:m));
     const guestSources=decodeGuestResearchSources(r);if(guestSources.length)setMsgs(xs=>xs.map((m,i)=>i===xs.length-1?{...m,sources:guestSources}:m));
     const reader=r.body.getReader();const dec=new TextDecoder();let buf='';let answer='';
     while(true){const {done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';for(const raw of lines){const line=raw.trim();if(!line.startsWith('data:'))continue;const data=line.slice(5).trim();if(!data||data==='[DONE]')continue;const j=JSON.parse(data);if(j?.error)throw new Error(friendlyGuestError(errorText(j.error)));const chunk=j?.choices?.[0]?.delta?.content||'';if(chunk){answer+=chunk;setMsgs(xs=>xs.map((m,i)=>i===xs.length-1?{...m,text:answer}:m))}}}
     if(!answer)setMsgs(xs=>xs.map((m,i)=>i===xs.length-1?{...m,text:'I didn’t get a response back. Please try again.'}:m));
+    return 'completed' as const;
   };
+  const sendGuest=async(content:string,currentAttachments:Attachment[],selectedCommandMode:string,selectedCommandSkills:string[])=>{
+    const userMsg:Msg={role:'user',text:content,attachments:currentAttachments};const visibleHistory=[...msgs,userMsg];
+    const turn:PendingGuestTurn={id:globalThis.crypto?.randomUUID?.()||`guest-turn-${Date.now()}`,history:visibleHistory.map(m=>({role:m.role,text:m.text})),attachments:currentAttachments,commandMode:selectedCommandMode,commandSkills:selectedCommandSkills,reason:'guest_rate_limited',retryAt:Date.now(),attempts:0,createdAt:Date.now()};
+    setText('');setAttachments([]);setCommandMode('');setCommandSkills([]);setCommandMenu('');
+    await attemptGuestTurn(turn);
+  };
+  useEffect(()=>{
+    if(!pendingGuestTurn&&!autoRunWaiting)return;
+    const timer=window.setInterval(()=>setAutoContinueClock(Date.now()),1000);
+    return()=>window.clearInterval(timer);
+  },[pendingGuestTurn,autoRunWaiting]);
+  useEffect(()=>{
+    if(!guest||!pendingGuestTurnId)return;
+    let cancelled=false;
+    const check=async()=>{
+      try{
+        const r=await fetch('/api/guest/policy',{cache:'no-store',headers:guestDeviceHeaders()});
+        if(!r.ok||cancelled)return;
+        const policy=await r.json() as GuestPolicy;setGuestPolicy(policy);
+        setPendingGuestTurn(current=>{
+          if(!current||current.id!==pendingGuestTurnId)return current;
+          let retryAt=current.retryAt;
+          if(current.reason==='guest_rate_limited'){
+            const seconds=Math.max(0,Number(policy.rateRetryAfterSeconds||0));
+            retryAt=seconds===0?Date.now():Date.now()+seconds*1000;
+          }else if(current.reason==='guest_quota_exhausted'){
+            const remaining=Number(policy.quota?.remaining||0);
+            if(policy.quotaMode==='unlimited'||remaining>0)retryAt=Date.now();
+            else if(policy.quota?.resetAt){const resetAt=new Date(policy.quota.resetAt).getTime();if(Number.isFinite(resetAt))retryAt=resetAt}
+		  }else{
+		    retryAt=current.retryAt;
+          }
+          if(retryAt===current.retryAt)return current;
+          const next={...current,retryAt};try{localStorage.setItem(PENDING_GUEST_TURN_KEY,JSON.stringify(next))}catch{}return next;
+        });
+      }catch{}
+    };
+    void check();const timer=window.setInterval(()=>void check(),AUTO_CONTINUE_POLL_MS);
+    const wake=()=>{if(document.visibilityState==='visible')void check()};window.addEventListener('focus',wake);document.addEventListener('visibilitychange',wake);
+    return()=>{cancelled=true;window.clearInterval(timer);window.removeEventListener('focus',wake);document.removeEventListener('visibilitychange',wake)};
+  },[guest,pendingGuestTurnId,pendingGuestTurnReason]);
+  useEffect(()=>{
+    if(!guest||!pendingGuestTurn||autoContinueClock<pendingGuestTurn.retryAt)return;
+    const timer=window.setTimeout(()=>{
+      if(autoContinueLockRef.current)return;
+      autoContinueLockRef.current=true;setBusy(true);setUploadError('');
+      void attemptGuestTurn(pendingGuestTurn).catch(e=>{
+        const message=e instanceof Error?e.message:String(e);
+        setMsgs(old=>{const last=old[old.length-1];if(last?.role==='ai'&&!last.text)return old.map((m,i)=>i===old.length-1?{...m,text:message}:m);return [...old,{role:'ai',text:message}]});
+      }).finally(()=>{autoContinueLockRef.current=false;setBusy(false)});
+    },0);
+    return()=>window.clearTimeout(timer);
+    // Retry uses the persisted turn snapshot; helper identity is intentionally excluded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[guest,pendingGuestTurn?.id,pendingGuestTurn?.retryAt,autoContinueClock]);
+  useEffect(()=>{
+    if(guest||!currentRun||!autoRunWaiting)return;
+    if(!quotaChangedForWaitingRun&&(!autoRunRetryAt||autoContinueClock<autoRunRetryAt))return;
+    const timer=window.setTimeout(()=>{
+      if(autoContinueLockRef.current)return;
+      autoContinueLockRef.current=true;
+      void controlRun('resume').finally(()=>{autoContinueLockRef.current=false});
+    },0);
+    return()=>window.clearTimeout(timer);
+    // Auto-resume is keyed by persisted run id/error/update time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[guest,currentRun?.id,currentRun?.error,currentRun?.updatedAt,autoRunWaiting,autoRunRetryAt,autoContinueClock,quotaChangedForWaitingRun]);
+  const cancelGuestAutoContinue=()=>{clearPendingGuestTurn();setUploadError('')};
   const send=async()=>{
-    if(!accessReady||(!text.trim()&&!attachments.length)||busy||uploading>0||(!guest&&quotaBlocked))return;setBusy(true);setAttachMenu(false);setUploadError('');
+    if(!accessReady||(!text.trim()&&!attachments.length)||busy||autoContinueWaiting||uploading>0)return;setBusy(true);setAttachMenu(false);setUploadError('');
     const q=text.trim();const currentAttachments=[...attachments];const selectedCommandMode=commandMode;const selectedCommandSkills=[...commandSkills];const content=q||attachmentReviewPrompt(msgs);
     try{
       if(guest){await sendGuest(content,currentAttachments,selectedCommandMode,selectedCommandSkills);return}
@@ -493,7 +679,8 @@ export default function Chat(){
             </div>:null}
             {m.attachments?.length?<div className="sentAttachments">{m.attachments.map(a=><a key={a.id} className="sentAttachment" href={`${guest?'/api/guest/attachments':'/api/attachments'}/${encodeURIComponent(a.id)}`} target="_blank" rel="noreferrer">{a.mediaType.startsWith('image/')?<ImageIcon size={14}/>:a.source==='folder'?<FolderOpen size={14}/>:<File size={14}/>}<span>{a.relativePath}</span></a>)}</div>:null}
           </div></div>})}
-          {currentRun&&currentRun.status!=='completed'?<div className="messageRow ai runMessage"><div className="messageAvatar">D</div><div className="messageStack"><div className="bubble">{currentRun.status==='queued'||currentRun.status==='running'?<div className="backgroundRunStatus thinking"><div className="typingDots" aria-label="Daiki is thinking"><i/><i/><i/></div><span>{currentRun.status==='queued'?'Queued for processing':currentRun.thinkingMode==='off'?'Generating response…':`Thinking · ${currentRun.thinkingMode.charAt(0).toUpperCase()+currentRun.thinkingMode.slice(1)}…`}</span></div>:currentRun.status==='paused'?<div className="backgroundRunStatus"><Pause size={15}/><span>Paused</span></div>:<div className="backgroundRunStatus error"><span>{currentRun.error==='quota_exhausted'?`Token quota used up${currentRun.activity?.quota?.resetAt?` · resets ${new Date(currentRun.activity.quota.resetAt).toLocaleTimeString()}`:''}`:currentRun.error==='pending_chat_rate_limited'?`Please wait ${currentRun.activity?.retryAfterSeconds||1}s before trying again.`:friendlyRunError(currentRun.error)}</span></div>}</div><div className="runControls">{currentRun.status==='running'||currentRun.status==='queued'?<button type="button" disabled={localBusy} onClick={()=>void controlRun('pause')}><Pause size={13}/>Pause</button>:currentRun.status==='paused'||currentRun.status==='failed'||currentRun.status==='cancelled'?<button type="button" disabled={localBusy} onClick={()=>void controlRun('resume')}><Play size={13}/>Play</button>:null}</div><RunActivityDetails run={currentRun}/></div></div>:null}
+          {pendingGuestTurn?<div className="messageRow ai runMessage autoContinueMessage"><div className="messageAvatar">D</div><div className="messageStack"><div className="bubble"><div className="backgroundRunStatus waiting"><RotateCcw size={15}/><span>{pendingGuestTurn.reason==='guest_rate_limited'?'Guest rate limit reached.':pendingGuestTurn.reason==='provider_rate_limited'?'Model provider is temporarily rate limited.':pendingGuestTurn.reason==='transport_retry'?'Connection interrupted. Daiki will reconnect automatically.':'Guest token quota is waiting for reset.'} Your message is saved and will continue automatically in <strong>{guestAutoWaitLabel}</strong>.</span></div></div><div className="runControls"><button type="button" disabled={localBusy} onClick={cancelGuestAutoContinue}><X size={13}/>Stop waiting</button></div></div></div>:null}
+          {currentRun&&currentRun.status!=='completed'?<div className="messageRow ai runMessage"><div className="messageAvatar">D</div><div className="messageStack"><div className="bubble">{currentRun.status==='queued'||currentRun.status==='running'?<div className="backgroundRunStatus thinking"><div className="typingDots" aria-label="Daiki is thinking"><i/><i/><i/></div><span>{runProgressLabel(currentRun,msgs)}</span></div>:currentRun.status==='paused'?<div className="backgroundRunStatus"><Pause size={15}/><span>Paused</span></div>:autoRunWaiting?<div className="backgroundRunStatus waiting"><RotateCcw size={15}/><span>{currentRun.error==='pending_chat_rate_limited'?'Rate limit reached.':'Token quota is waiting for reset.'} {autoRunRetryAt?<><span>This message is saved and will continue automatically in </span><strong>{runAutoWaitLabel}</strong>.</>:<span>This message is saved and will continue automatically when quota becomes available.</span>}</span></div>:<div className="backgroundRunStatus error"><span>{friendlyRunError(currentRun.error)}</span></div>}</div><div className="runControls">{currentRun.status==='running'||currentRun.status==='queued'?<button type="button" disabled={localBusy} onClick={()=>void controlRun('pause')}><Pause size={13}/>Pause</button>:autoRunWaiting?<><button type="button" disabled={localBusy} onClick={()=>void controlRun('resume')}><Play size={13}/>Continue now</button><button type="button" disabled={localBusy} onClick={()=>void controlRun('cancel')}><X size={13}/>Stop waiting</button></>:currentRun.status==='paused'||currentRun.status==='failed'||currentRun.status==='cancelled'?<button type="button" disabled={localBusy} onClick={()=>void controlRun('resume')}><Play size={13}/>Play</button>:null}</div><RunActivityDetails run={currentRun}/></div></div>:null}
         </div>}
       </div>
 
@@ -505,7 +692,7 @@ export default function Chat(){
           {commandMenu&&commandItems.length?<div className="commandPalette" role="listbox" aria-label={commandMenu==='mode'?'Modes':'Skills'}><div className="commandPaletteHead"><strong>{commandMenu==='mode'?'Modes':'Skills'}</strong><span>{commandMenu==='mode'?'Choose how Daiki should work':'Choose up to 4 skills for this turn'}</span></div>{commandItems.map((item,index)=><button type="button" role="option" aria-selected={index===commandIndex} className={index===commandIndex?'active':''} key={item.id} onMouseDown={e=>e.preventDefault()} onClick={()=>selectCommand(item)}><code>{commandMenu==='mode'?'/':'@'}{item.id}</code><span><strong>{item.name}</strong><small>{item.description}</small></span>{guest&&item.guest?<em>Guest</em>:null}</button>)}</div>:null}
           {attachments.length||uploading?<div className="attachmentTray">{attachments.map(a=><div className="attachmentChip" key={a.id}><span className="attachmentIcon">{a.mediaType.startsWith('image/')?<ImageIcon size={16}/>:a.source==='folder'?<FolderOpen size={16}/>:<File size={16}/>}</span><div><strong>{a.name}</strong><small>{a.source==='folder'?a.relativePath:size(a.sizeBytes)} · {a.extractStatus}</small></div><button type="button" aria-label={`Remove ${a.name}`} onClick={()=>void removeAttachment(a)}><X size={14}/></button></div>)}{uploading?<div className="attachmentChip uploading"><span className="attachmentIcon"><Paperclip size={16}/></span><div><strong>Uploading…</strong><small>{uploading} file{uploading>1?'s':''}</small></div></div>:null}</div>:null}
           {uploadError?<div className="attachmentError">{uploadError}</div>:null}
-          <div className="composerRow"><div className="attachmentMenuWrap"><button className="attachBtn" type="button" aria-label="Add or generate attachment" disabled={attachmentRestricted||busy||Boolean(guestGenerating)} onClick={()=>{setCommandMenu('');setAttachMenu(x=>!x)}}><Plus size={20}/></button>{attachMenu?<div className="attachmentMenu"><button type="button" onClick={()=>imageRef.current?.click()}><ImageIcon size={17}/><span><strong>Upload image</strong><small>PNG, JPEG, WebP and more</small></span></button><button type="button" onClick={()=>fileRef.current?.click()}><File size={17}/><span><strong>Upload file</strong><small>Text, code, data or documents</small></span></button>{!guest?<button type="button" onClick={()=>folderRef.current?.click()}><FolderOpen size={17}/><span><strong>Folder</strong><small>Upload a project directory</small></span></button>:null}{guest&&guestPolicy?.allowImageGeneration?<button type="button" disabled={!text.trim()||Boolean(guestGenerating)} onClick={()=>void generateGuestAttachment('image')}><ImageIcon size={17}/><span><strong>Generate image</strong><small>{guestPolicy.imageGenerationsPerDay}/day · uses current prompt</small></span></button>:null}{guest&&guestPolicy?.allowFileGeneration?<button type="button" disabled={!text.trim()||Boolean(guestGenerating)} onClick={()=>void generateGuestAttachment('file')}><File size={17}/><span><strong>Generate file</strong><small>{guestPolicy.fileGenerationsPerDay}/day · uses current prompt</small></span></button>:null}</div>:null}</div><textarea ref={textareaRef} className="chatInput" rows={1} value={text} onChange={e=>updateComposerText(e.target.value)} onKeyDown={handleComposerKeyDown} placeholder={guest?'Message Daiki…  / modes  @ skills':pending?'Message Daiki…  / modes  @ skills':'Message Daiki…  / modes  @ skills'}/><button className="sendBtn" aria-label="Send message" disabled={!accessReady||busy||uploading>0||Boolean(guestGenerating)||(!guest&&quotaBlocked)||(!text.trim()&&!attachments.length)} type="submit"><Send size={18}/></button></div>
+          <div className="composerRow"><div className="attachmentMenuWrap"><button className="attachBtn" type="button" aria-label="Add or generate attachment" disabled={attachmentRestricted||busy||autoContinueWaiting||Boolean(guestGenerating)} onClick={()=>{setCommandMenu('');setAttachMenu(x=>!x)}}><Plus size={20}/></button>{attachMenu?<div className="attachmentMenu"><button type="button" onClick={()=>imageRef.current?.click()}><ImageIcon size={17}/><span><strong>Upload image</strong><small>PNG, JPEG, WebP and more</small></span></button><button type="button" onClick={()=>fileRef.current?.click()}><File size={17}/><span><strong>Upload file</strong><small>Text, code, data or documents</small></span></button>{!guest?<button type="button" onClick={()=>folderRef.current?.click()}><FolderOpen size={17}/><span><strong>Folder</strong><small>Upload a project directory</small></span></button>:null}{guest&&guestPolicy?.allowImageGeneration?<button type="button" disabled={!text.trim()||Boolean(guestGenerating)} onClick={()=>void generateGuestAttachment('image')}><ImageIcon size={17}/><span><strong>Generate image</strong><small>{guestPolicy.imageGenerationsPerDay}/day · uses current prompt</small></span></button>:null}{guest&&guestPolicy?.allowFileGeneration?<button type="button" disabled={!text.trim()||Boolean(guestGenerating)} onClick={()=>void generateGuestAttachment('file')}><File size={17}/><span><strong>Generate file</strong><small>{guestPolicy.fileGenerationsPerDay}/day · uses current prompt</small></span></button>:null}</div>:null}</div><textarea ref={textareaRef} className="chatInput" rows={1} value={text} onChange={e=>updateComposerText(e.target.value)} onKeyDown={handleComposerKeyDown} placeholder={guest?'Message Daiki…  / modes  @ skills':pending?'Message Daiki…  / modes  @ skills':'Message Daiki…  / modes  @ skills'}/><button className="sendBtn" aria-label="Send message" disabled={!accessReady||busy||autoContinueWaiting||uploading>0||Boolean(guestGenerating)||(!text.trim()&&!attachments.length)} type="submit"><Send size={18}/></button></div>
           <input ref={imageRef} hidden type="file" accept="image/*" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'image');e.currentTarget.value=''}}/><input ref={fileRef} hidden type="file" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'file');e.currentTarget.value=''}}/><input ref={folderRef} hidden type="file" multiple onChange={e=>{if(e.target.files)void uploadFiles(e.target.files,'folder');e.currentTarget.value=''}}/>
         </form>
         <div className="composerHint">{guest?<><span>Guest chat is temporary · / modes · @ skills · quota applies · </span><Link href="/login">Sign in for full access</Link></>:<>Type / for modes · @ for skills · Daiki can make mistakes. Check important information.</>}</div>
