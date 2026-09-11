@@ -163,7 +163,7 @@
 /* Unified navigation: chat history and normal app navigation share one sidebar. */
 .chatShell{grid-template-columns:274px minmax(0,1fr)}
 .chatShell .appSidebar{padding:12px 10px}
-.chatShell .sidebarScroll{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.chatShell .sidebarScroll{display:flex;flex:1 1 auto;flex-direction:column;min-height:0;overflow:hidden}
 .sidebarNavSections{min-width:0}
 .chatShell .sidebarNavSections{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;scrollbar-width:thin;padding-right:2px}
 .chatSidebarSlot{display:flex;flex:0 1 clamp(240px,40dvh,410px);min-height:220px;max-height:410px;flex-direction:column;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--line)}
