@@ -17,6 +17,7 @@ const userNav:Item[]=[
 const adminNav:Item[]=[
   {label:'Dashboard',href:'/admin',icon:'dashboard'},
   {label:'Users',href:'/admin/users',icon:'users'},
+  {label:'Guests',href:'/admin/guests',icon:'users'},
   {label:'Tokens',href:'/admin/tokens',icon:'tokens'},
   {label:'API Keys',href:'/admin/api-keys',icon:'keys'},
   {label:'Usage',href:'/admin/usage',icon:'usage'},
